@@ -6,7 +6,6 @@ RUN apk add --no-cache git
 WORKDIR /app
 
 COPY go.mod ./
-# Download dependencies (go.sum is generated automatically)
 RUN go mod download || true
 
 COPY main.go ./
@@ -15,15 +14,17 @@ RUN go mod tidy && go build -o papyrus -ldflags="-s -w" .
 # Stage 2: Minimal runtime image
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates
+# Install bash (required for your script) and dos2unix (to fix Windows line endings)
+RUN apk add --no-cache ca-certificates bash dos2unix
 
 WORKDIR /app
 
 COPY --from=builder /app/papyrus .
 
 COPY papyrus.sh .
-RUN chmod +x papyrus.sh
+# Ensure the script has Linux line endings and is executable
+RUN dos2unix papyrus.sh && chmod +x papyrus.sh
 
 VOLUME ["/pdfs"]
 
-ENTRYPOINT ["./papyrus.sh"]
+ENTRYPOINT ["/bin/bash", "./papyrus.sh"]
