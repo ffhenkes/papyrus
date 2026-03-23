@@ -2,8 +2,22 @@ services:
   papyrus:
     build: .
     environment:
-      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:8b}
+      - CUSTOM_PROMPT=${CUSTOM_PROMPT:-"Explain this document."}
     volumes:
       - ./pdfs:/pdfs:ro
-    # Usage: docker compose run papyrus /pdfs/myfile.pdf "optional prompt"
+    command: ["/${PDF_FILE:-pdfs/test.pdf}", "${CUSTOM_PROMPT}"]
+    depends_on:
+      - ollama
+
+  ollama:
+    build:
+      context: .
+      dockerfile: ollama.Dockerfile
+    environment:
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:8b}
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama_data:/root/.ollama

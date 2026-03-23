@@ -1,5 +1,5 @@
 # Stage 1: Build
-FROM golang:1.22-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 RUN apk add --no-cache git
 
@@ -21,6 +21,9 @@ WORKDIR /app
 
 COPY --from=builder /app/papyrus .
 
+COPY papyrus.sh .
+RUN chmod +x papyrus.sh
+
 VOLUME ["/pdfs"]
 
-ENTRYPOINT ["./papyrus"]
+ENTRYPOINT ["./papyrus.sh"]

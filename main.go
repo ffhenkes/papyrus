@@ -9,8 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/pdfcpu/pdfcpu/pkg/api"
-	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
+	"github.com/ledongthuc/pdf"
 )
 
 // --- Config ---
@@ -90,27 +89,30 @@ func main() {
 // --- PDF Text Extraction ---
 
 func extractPDFText(pdfPath string) (string, error) {
-	conf := pdfcpu.NewDefaultConfiguration()
-
-	ctx, err := api.ReadContextFile(pdfPath, conf)
+	file, content, err := pdf.Open(pdfPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to read PDF: %w", err)
+		return "", fmt.Errorf("could not open PDF file '%s': make sure the file exists and is mapped to the /pdfs directory (error: %w)", pdfPath, err)
 	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing file: %v\n", err)
+		}
+	}()
 
 	var sb strings.Builder
-	for i := 1; i <= ctx.PageCount; i++ {
-		page, err := ctx.ExtractPageText(i)
+	for i := 1; i <= content.NumPage(); i++ {
+		page := content.Page(i)
+		text, err := page.GetPlainText(nil)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not extract text from page %d: %v\n", i, err)
 			continue
 		}
-		if strings.TrimSpace(page) == "" {
+		if strings.TrimSpace(text) == "" {
 			continue
 		}
-		sb.WriteString(fmt.Sprintf("\n--- Page %d ---\n", i))
-		sb.WriteString(page)
+		fmt.Fprintf(&sb, "\n--- Page %d ---\n", i)
+		sb.WriteString(text)
 	}
-
 	return sb.String(), nil
 }
 
@@ -166,7 +168,11 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 	if err != nil {
 		return "", fmt.Errorf("could not reach Ollama at %s — is it running? (%w)", ollamaURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
+		}
+	}()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -179,6 +185,9 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 	}
 
 	if chatResp.Error != "" {
+		if strings.Contains(chatResp.Error, "model") && strings.Contains(chatResp.Error, "not found") {
+			return "", fmt.Errorf("Ollama model '%s' not found. Please run 'ollama pull %s' inside the Ollama container or on your host (error: %s)", modelName, modelName, chatResp.Error)
+		}
 		return "", fmt.Errorf("ollama error: %s", chatResp.Error)
 	}
 
