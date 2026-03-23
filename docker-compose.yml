@@ -1,0 +1,9 @@
+services:
+  papyrus:
+    build: .
+    environment:
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:8b}
+    volumes:
+      - ./pdfs:/pdfs:ro
+    # Usage: docker compose run papyrus /pdfs/myfile.pdf "optional prompt"

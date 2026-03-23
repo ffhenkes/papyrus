@@ -1,0 +1,20 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck      # unhandled errors
+    - govet         # suspicious constructs
+    - staticcheck   # advanced static analysis
+    - unused        # unused code
+    - bodyclose     # unclosed http response bodies
+    - gosec         # security issues
+    - errorlint     # correct error wrapping with %w
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+run:
+  timeout: 5m
