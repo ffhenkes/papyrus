@@ -45,7 +45,9 @@ func (r *REPL) Start() error {
 		_, _ = fmt.Fprint(r.writer, "\n> ")
 		if !scanner.Scan() {
 			// EOF reached - auto-save on exit
-			_ = r.saveSession()
+			if err := r.saveSession(); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: auto-save failed: %v\n", err)
+			}
 			break
 		}
 

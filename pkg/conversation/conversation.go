@@ -1,8 +1,10 @@
 package conversation
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"papyrus/pkg/llm"
@@ -31,14 +33,22 @@ func New(fileName, documentText string) *Conversation {
 	}
 }
 
-// generateSessionID creates a deterministic session ID from filename and timestamp.
-// Format: filename-timestamp-hash for uniqueness.
+// generateSessionID creates a unique session ID from filename, timestamp, and random entropy.
+// Format: base-hash. Safely strips any file extension.
 func generateSessionID(fileName string) string {
-	// Use SHA256 hash of filename + timestamp for collision avoidance
-	hash := sha256.Sum256([]byte(fileName + time.Now().Format(time.RFC3339Nano)))
-	return fmt.Sprintf("%s-%s",
-		fileName[:len(fileName)-len(".pdf")], // Remove .pdf extension
-		fmt.Sprintf("%x", hash)[:12])         // Use first 12 hex chars
+	// Safely strip directory and extension from filename
+	base := filepath.Base(fileName)
+	if ext := filepath.Ext(base); ext != "" {
+		base = base[:len(base)-len(ext)]
+	}
+	if base == "" || base == "." {
+		base = "session"
+	}
+	// Mix filename + nanosecond timestamp + random bytes for guaranteed uniqueness
+	rndBytes := make([]byte, 8)
+	_, _ = rand.Read(rndBytes)
+	hash := sha256.Sum256(append([]byte(fileName+time.Now().Format(time.RFC3339Nano)), rndBytes...))
+	return fmt.Sprintf("%s-%s", base, fmt.Sprintf("%x", hash)[:12])
 }
 
 // AddMessage adds a new message to the conversation.

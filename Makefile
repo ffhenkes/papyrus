@@ -29,7 +29,7 @@ help: ## Show available targets
 
 up: ## Start Ollama + Papyrus stack
 	@echo "Starting docker-compose stack (Ollama + Papyrus)..."
-	@docker-compose up --build
+	@docker-compose up -d --build
 
 down: ## Stop and remove containers
 	@echo "Stopping docker-compose stack..."
@@ -66,9 +66,10 @@ build: ## Build binary for GOOS/GOARCH (default: linux/amd64)
 clean: ## Remove bin directory
 	@rm -rf bin
 
-run: build ## Build and run binary locally (requires local Ollama on localhost:11434)
-	@echo "Running $(BINARY) locally..."
-	@OLLAMA_URL=http://localhost:11434 ./$(BINARY) $(ARGS)
+run: ## Build and run binary locally (requires local Ollama on localhost:11434)
+	@echo "Running locally..."
+	@GOOS=$(shell go env GOOS) GOARCH=$(shell go env GOARCH) $(MAKE) build
+	@OLLAMA_URL=http://localhost:11434 ./bin/$(shell go env GOOS)-$(shell go env GOARCH)/papyrus $(ARGS)
 
 docker-build: ## Build Docker image
 	@echo "Building Docker image..."

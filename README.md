@@ -8,6 +8,7 @@
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Session Persistence](#session-persistence)
 - [Configuration](#configuration)
 - [Available Commands](#available-commands)
 - [Troubleshooting](#troubleshooting)
@@ -132,6 +133,51 @@ make build
 make run ARGS="pdfs/test.pdf"
 ```
 
+
+## Session Persistence
+
+Papyrus automatically saves your conversation to disk so you can **resume analysis later** without re-processing the PDF.
+
+Sessions are stored in `~/.papyrus/sessions/` as JSON files.
+
+### Session Flags
+
+```bash
+# List all saved sessions
+papyrus --list
+papyrus --sessions   # alias
+
+# Resume a saved session (enter REPL directly, no PDF needed)
+papyrus --session <session-id>
+
+# Delete a saved session
+papyrus --delete <session-id>
+```
+
+**Example workflow:**
+
+```bash
+# First run: analyze PDF, auto-saved on exit
+papyrus pdfs/report.pdf
+
+# Later: resume where you left off
+papyrus --list                           # shows session IDs
+papyrus --session report-abc123def456    # resume
+```
+
+### Interactive REPL Commands
+
+While in interactive mode, the following commands are available:
+
+| Command | Description |
+|---------|-------------|
+| `history` | Show all messages in the current session |
+| `save` | Explicitly save the session to disk |
+| `session info` | Show session metadata (ID, file, timestamps, message count) |
+| `quit` / `exit` | Save and exit |
+
+Sessions are also **auto-saved on exit** (including Ctrl+D / EOF).
+
 ## Configuration
 
 All settings are managed via the `.env` file. Create one from the template:
@@ -204,6 +250,15 @@ The system prompt used is:
 | `make deps` | Download/tidy Go dependencies |
 | `make clean` | Remove bin/ directory |
 | `make docker-build` | Build Docker image manually |
+
+**Binary (session management):**
+
+| Flag | Description |
+|------|-------------|
+| `papyrus <file.pdf> [prompt]` | Analyze a PDF and enter interactive REPL |
+| `papyrus --list` | List all saved sessions |
+| `papyrus --session <id>` | Resume a saved session |
+| `papyrus --delete <id>` | Delete a saved session |
 
 ## Troubleshooting
 

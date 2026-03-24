@@ -20,6 +20,7 @@ func main() {
 	sessionID := fs.String("session", "", "Resume an existing session by ID")
 	listSessions := fs.Bool("list", false, "List all saved sessions and exit")
 	listSessions2 := fs.Bool("sessions", false, "List all saved sessions and exit (alias for --list)")
+	deleteSession := fs.String("delete", "", "Delete a saved session by ID")
 
 	// Parse flags (allowing positional args to remain)
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -33,6 +34,12 @@ func main() {
 	// Handle --list or --sessions flag
 	if *listSessions || *listSessions2 {
 		handleListSessions(sessionDir)
+		return
+	}
+
+	// Handle --delete flag
+	if *deleteSession != "" {
+		handleDeleteSession(*deleteSession, sessionDir)
 		return
 	}
 
@@ -223,6 +230,15 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
+// handleDeleteSession deletes a saved session by ID.
+func handleDeleteSession(sessionID, sessionDir string) {
+	if err := conversation.DeleteSession(sessionID, sessionDir); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Session '%s' deleted.\n", sessionID)
+}
+
 // printUsage prints the usage information.
 func printUsage() {
 	fmt.Fprintln(os.Stderr, "Usage: papyrus <path-to-pdf> [custom prompt]")
@@ -231,6 +247,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  --session ID    Resume an existing session")
 	fmt.Fprintln(os.Stderr, "  --list          List all saved sessions")
 	fmt.Fprintln(os.Stderr, "  --sessions      List all saved sessions (alias)")
+	fmt.Fprintln(os.Stderr, "  --delete ID     Delete a saved session")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Environment variables:")
 	fmt.Fprintln(os.Stderr, "  OLLAMA_URL    Ollama base URL (default: http://host.docker.internal:11434)")
@@ -241,5 +258,6 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  papyrus document.pdf 'Focus on the technical details'")
 	fmt.Fprintln(os.Stderr, "  papyrus --list")
 	fmt.Fprintln(os.Stderr, "  papyrus --session my-doc-abc123def456")
+	fmt.Fprintln(os.Stderr, "  papyrus --delete my-doc-abc123def456")
 	fmt.Fprintln(os.Stderr, "  OLLAMA_MODEL=deepseek-r1:14b papyrus document.pdf")
 }
