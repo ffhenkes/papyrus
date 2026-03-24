@@ -1,0 +1,5 @@
+bin/
+pdfs/
+ollama_data/
+.github/
+.env

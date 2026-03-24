@@ -1,0 +1,295 @@
+# Papyrus
+
+**Papyrus** is a tool to analyze and explain PDF documents using [Ollama](https://ollama.ai/) — a local LLM runtime. Extract insights, summaries, and answers from your PDFs using customizable prompts and local language models.
+
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [Available Commands](#available-commands)
+- [Troubleshooting](#troubleshooting)
+
+## Quick Start
+
+Get Papyrus running in 2 steps:
+
+### Option 1: Docker-based (Recommended)
+
+```bash
+# 1. Navigate to the project
+cd papyrus
+
+# 2. Configure your PDF file and model (edit .env or inline)
+export OLLAMA_MODEL=qwen3:8b
+export PDF_FILE=pdfs/test.pdf
+export CUSTOM_PROMPT="Summarize this document"
+
+# 3. Analyze a PDF
+make run-pdf PDF_FILE=pdfs/test.pdf CUSTOM_PROMPT="Summarize key findings"
+```
+
+This automatically pulls the latest models and runs the analysis. To start the full stack and keep it running:
+
+```bash
+# Start Ollama + Papyrus stack in background
+make up
+
+# In another terminal, analyze PDFs
+make run-pdf PDF_FILE=pdfs/myfile.pdf
+
+# Stop when done
+make down
+```
+
+### Option 2: Local binary (requires local Ollama)
+
+```bash
+# Prerequisites: Ollama must be running on your machine (http://localhost:11434)
+
+# Build the binary
+make build
+
+# Run it
+make run ARGS="pdfs/test.pdf 'Summarize this document'"
+```
+
+## Prerequisites
+
+- **Docker & Docker Compose:** v1.29.0 or higher
+  - [Install Docker](https://docs.docker.com/get-docker/)
+  - Docker Compose comes with Docker Desktop
+- **Go** (optional, only for local development): v1.24.1 or higher
+- **System Resources:**
+  - Minimum 8GB RAM (for running Ollama + Papyrus)
+  - At least 4GB free disk space for Ollama models
+
+## Installation
+
+### Docker-based (Recommended)
+
+No additional installation needed beyond Docker and Docker Compose. The `make up` command handles everything.
+
+### Local Development
+
+For development without Docker:
+
+```bash
+# Install Go dependencies
+make deps
+
+# Run linter
+make lint
+
+# Run tests
+make test
+
+# Build the binary locally
+make build
+
+# Run against local Ollama (must be running on localhost:11434)
+make run ARGS="pdfs/test.pdf 'Summarize this'"
+```
+
+**Note:** Local mode requires Ollama installed and running separately on your machine. Docker mode (recommended) includes Ollama automatically.
+
+## Usage
+
+### Two Usage Modes
+
+**Mode 1: Docker (Recommended)** — Everything isolated in containers
+- Use: `make run-pdf PDF_FILE=pdfs/test.pdf`
+- Ollama runs inside Docker: `http://ollama:11434`
+- Models stored in `./ollama_data/` (persistent)
+- No local dependencies needed
+
+**Mode 2: Local Binary** — Run natively on your machine
+- Use: `make run ARGS="pdfs/test.pdf 'Custom prompt'"`
+- Requires: Ollama running locally on `http://localhost:11434`
+- Useful for: development, integration with local tools
+- Note: Must start Ollama separately (not included)
+
+### Docker-based Analysis (Recommended)
+
+```bash
+# One-shot analysis (pulls models on first run)
+make run-pdf PDF_FILE=pdfs/myfile.pdf CUSTOM_PROMPT="List the main topics"
+
+# Or use persistent stack
+make up                              # Start stack in background
+make run-pdf PDF_FILE=pdfs/file1.pdf # Analyze file 1
+make run-pdf PDF_FILE=pdfs/file2.pdf # Analyze file 2
+make down                            # Stop when done
+```
+
+### Local Binary Analysis
+
+```bash
+# Requires: Ollama running on localhost:11434
+make build
+make run ARGS="pdfs/test.pdf"
+```
+
+## Configuration
+
+All settings are managed via the `.env` file. Create one from the template:
+
+```bash
+cp .env.example .env
+```
+
+### Environment Variables
+
+| Variable | Docker Default | Local Default | Description |
+|----------|---|---|-------------|
+| `OLLAMA_URL` | `http://ollama:11434` | `http://host.docker.internal:11434` | Ollama API endpoint |
+| `OLLAMA_MODEL` | `qwen3:8b` | `qwen3:8b` | LLM model to use (must be installed in Ollama) |
+| `PDF_FILE` | `pdfs/test.pdf` | N/A | Path to PDF file to analyze |
+| `CUSTOM_PROMPT` | `"Explain this document."` | N/A | Custom prompt for PDF analysis |
+
+**Important:** 
+- **Docker mode** uses `http://ollama:11434` (internal Docker service name)
+- **Local binary mode** tries to connect to `http://host.docker.internal:11434` which only works from inside Docker containers
+- **To run locally**, start Ollama on your machine and it will listen on `http://localhost:11434`
+- The `make run` target automatically sets `OLLAMA_URL=http://localhost:11434` for local execution
+
+### Supported Ollama Models
+
+Common models available in Ollama (install/pull them beforehand):
+- `qwen3:8b` — Fast, general-purpose (recommended default)
+- `llama2:7b` — General-purpose, well-rounded
+- `mistral:7b` — Fast, excellent for summaries
+- `neural-chat:7b` — Optimized for conversations
+- `gemma:7b` — Lightweight, good performance
+
+For more models, visit [Ollama Model Library](https://ollama.ai/library).
+
+### Customizing Prompts
+
+Replace the default prompt with your own use case. Edit `.env` or pass `CUSTOM_PROMPT` on the command line:
+
+```bash
+# Extract structured data (JSON format)
+make run-pdf PDF_FILE=pdfs/test.pdf CUSTOM_PROMPT="Extract all dates, names, and amounts as JSON"
+
+# Generate specific summary
+make run-pdf PDF_FILE=pdfs/test.pdf CUSTOM_PROMPT="Create a 3-paragraph executive summary"
+
+# Q&A mode  
+make run-pdf PDF_FILE=pdfs/test.pdf CUSTOM_PROMPT="What are the key risks discussed in this document?"
+```
+
+The system prompt used is:
+> You are an expert document analyst. When given document content, you:
+> 1. Identify the document type and purpose
+> 2. Summarize the key topics and main points clearly
+> 3. Highlight important details, data, or findings
+> 4. Explain any technical concepts in accessible language
+> 5. Note the document structure and how it's organized
+
+## Available Commands
+
+| Command | Description |
+|---------|-------------|
+| `make help` | Show all available targets |
+| `make up` | Start Ollama + Papyrus Docker stack (`docker-compose up`) |
+| `make down` | Stop and remove containers (`docker-compose down`) |
+| `make run-pdf PDF_FILE=... [CUSTOM_PROMPT=...]` | Analyze a PDF (via Docker) |
+| `make build` | Build binary locally (default: linux/amd64) |
+| `make run ARGS="..."` | Build and run binary locally (requires local Ollama at localhost:11434) |
+| `make test` | Run automated tests |
+| `make lint` | Run code linter |
+| `make deps` | Download/tidy Go dependencies |
+| `make clean` | Remove bin/ directory |
+| `make docker-build` | Build Docker image manually |
+
+## Troubleshooting
+
+### "Connection refused" or "Cannot connect to Ollama"
+
+**Problem:** Can't connect to Ollama service.
+
+**Solutions:**
+- **If using Docker mode:** Ensure Ollama container is running: `docker-compose logs ollama`
+- **If using local binary mode:** Ensure Ollama is running on your machine:
+  ```bash
+  ollama serve  # Start Ollama if not running
+  ```
+  Then verify it's accessible: `curl http://localhost:11434/api/tags`
+
+### "Model not found" error
+
+**Problem:** The specified model is not installed in Ollama.
+
+**Solution:**
+- Pull the model manually:
+  ```bash
+  # If using Docker
+  docker-compose exec ollama ollama pull qwen3:8b
+  
+  # If running Ollama locally  
+  ollama pull qwen3:8b
+  ```
+- Or change to an available model in `.env` or via command line
+
+### PDF parsing fails or "scanned image PDF" error
+
+**Problem:** "Could not extract any text from the PDF (scanned image PDF?)"
+
+**Reason:** PDF parser only handles text-based PDFs, not scanned images.
+
+**Workaround:**
+1. Use OCR tools to convert scanned PDFs first: `tesseract scanned.pdf text.pdf`
+2. Ensure PDFs are not encrypted/password-protected
+3. Try a different PDF
+
+### Docker memory errors ("Cannot allocate memory")
+
+**Problem:** Out of memory errors when processing large PDFs or using large models.
+
+**Solutions:**
+- Increase Docker memory allocation:
+  - **Docker Desktop:** Settings → Resources → Memory (set to 16GB+ for large models)
+- Use a smaller model: `OLLAMA_MODEL=mistral:7b` instead of larger models
+- Reduce PDF file size or process files sequentially
+
+### Slow performance
+
+**Problem:** PDF analysis takes too long.
+
+**Causes & Solutions:**
+- **Large PDF:** Use a smaller model or break into smaller files
+- **Large model (13B+):** Switch to 7B parameter models: `mistral:7b`, `llama2:7b`
+- **Slow disk:** Ensure project is on SSD, not network/USB drive
+- **Low memory:** Increase Docker/system memory allocation
+- **Other processes:** Check system resource usage
+
+### "make: command not found"
+
+**Problem:** GNU Make is not installed.
+
+**Solution:**
+- **Linux:** `sudo apt-get install make`
+- **macOS:** `xcode-select --install` (Xcode Command Line Tools)
+- **Windows:** Install [Windows Subsystem for Linux (WSL2)](https://docs.microsoft.com/en-us/windows/wsl/) or [Git Bash](https://git-scm.com/download/win)
+
+### PDF_FILE path issues in Docker
+
+**Problem:** "File not found" or "Permission denied" errors.
+
+**Details:**
+- PDFs must be in the `./pdfs/` directory (it's mounted as `/pdfs` in containers)
+- Use relative paths: `make run-pdf PDF_FILE=pdfs/myfile.pdf` (not absolute paths)
+- Files should be readable: `chmod 644 pdfs/yourfile.pdf`
+
+---
+
+## Development
+
+For more information on local development, testing, and contributing, see the project structure and Makefile targets above.
+
+## License
+
+See LICENSE file for details.
