@@ -57,16 +57,19 @@ func main() {
 
 	// Create LLM client
 	client := llm.NewClient(ollamaURL, modelName, config.MaxTokens)
+	// Store document in client once to avoid re-sending on each follow-up question
+	client.DocumentText = text
 
-	// Send initial message (this also adds it to conversation history)
-	explanation, err := client.SendMessage(conv.GetHistory(), fullUserMessage)
+	// Send initial message with document context (using optimized method)
+	explanation, err := client.SendMessageWithDoc([]llm.ChatMessage{}, fullUserMessage, text)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Add messages to conversation for multi-turn support
-	conv.AddMessage("user", fullUserMessage)
+	// Store only the prompt without the document (document is in client.DocumentText)
+	conv.AddMessage("user", userPrompt)
 	conv.AddMessage("assistant", explanation)
 
 	fmt.Println(explanation)

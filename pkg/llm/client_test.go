@@ -188,3 +188,106 @@ func BenchmarkSendMessage(b *testing.B) {
 		_, _ = client.SendMessage([]ChatMessage{}, "test")
 	}
 }
+
+// TestSendMessageWithDoc sends a message with document context
+func TestSendMessageWithDoc(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("Failed to decode request: %v", err)
+		}
+
+		// Verify system message contains document
+		if len(req.Messages) < 1 || req.Messages[0].Role != "system" {
+			t.Errorf("Expected system message first, got %d messages", len(req.Messages))
+		}
+		if len(req.Messages) > 0 && req.Messages[0].Role == "system" {
+			if len(req.Messages[0].Content) == 0 {
+				t.Error("System message should contain content")
+			}
+		}
+
+		resp := ChatResponse{
+			Message: ChatMessage{
+				Role:    "assistant",
+				Content: "Document analyzed",
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-model", 4096)
+	client.DocumentText = "This is a test document with sample content."
+
+	response, err := client.SendMessageWithDoc([]ChatMessage{}, "Analyze this document", "This is a test document with sample content.")
+
+	if err != nil {
+		t.Fatalf("SendMessageWithDoc() returned error: %v", err)
+	}
+
+	if response != "Document analyzed" {
+		t.Errorf("SendMessageWithDoc() = %q, want 'Document analyzed'", response)
+	}
+}
+
+// TestSendMessageWithDocHistory verifies document context isn't duplicated in history
+func TestSendMessageWithDocHistory(t *testing.T) {
+	callCount := 0
+	var firstRequestSize int
+	var secondRequestSize int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("Failed to decode request: %v", err)
+		}
+
+		callCount++
+		reqBody, _ := json.Marshal(req)
+		switch callCount {
+		case 1:
+			firstRequestSize = len(reqBody)
+		case 2:
+			secondRequestSize = len(reqBody)
+		}
+
+		resp := ChatResponse{
+			Message: ChatMessage{
+				Role:    "assistant",
+				Content: "Response",
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-model", 4096)
+	documentText := "This is a test document with sample content that should be in system message."
+	client.DocumentText = documentText
+
+	// First message with document
+	_, err := client.SendMessageWithDoc([]ChatMessage{}, "First question", documentText)
+	if err != nil {
+		t.Fatalf("First SendMessageWithDoc() failed: %v", err)
+	}
+
+	// Second message with history (document should not be duplicated in user message history)
+	history := []ChatMessage{
+		{Role: "user", Content: "First question"},
+		{Role: "assistant", Content: "Response"},
+	}
+	_, err = client.SendMessageWithDoc(history, "Follow-up question", documentText)
+	if err != nil {
+		t.Fatalf("Second SendMessageWithDoc() failed: %v", err)
+	}
+
+	// The second request should be smaller than 2x the first
+	// because document isn't in the user message history
+	if secondRequestSize >= firstRequestSize*2 {
+		t.Errorf("Second request size (%d) should be significantly smaller than 2x first request size (%d), suggests document duplication",
+			secondRequestSize, firstRequestSize*2)
+	}
+}

@@ -80,7 +80,8 @@ func (r *REPL) handleCommand(input string) bool {
 
 // sendMessage sends a user message to the LLM and appends the response to conversation.
 func (r *REPL) sendMessage(userMessage string) bool {
-	response, err := r.client.SendMessage(r.conv.GetHistory(), userMessage)
+	// Use SendMessageWithDoc to avoid re-sending the document with each follow-up
+	response, err := r.client.SendMessageWithDoc(r.conv.GetHistory(), userMessage, r.client.DocumentText)
 	if err != nil {
 		_, _ = fmt.Fprintf(r.writer, "Error: %v\n", err)
 		return false
