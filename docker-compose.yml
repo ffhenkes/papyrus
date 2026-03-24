@@ -1,5 +1,6 @@
 services:
   papyrus:
+    profiles: ["cli"]
     build: .
     environment:
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}

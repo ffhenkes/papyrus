@@ -28,7 +28,7 @@ func TestNewREPL(t *testing.T) {
 
 	client := llm.NewClient(server.URL, "test-model", 4096)
 	conv := conversation.New("test.pdf", "test content")
-	repl := New(client, conv)
+	repl := New(client, conv, "")
 
 	if repl.client != client {
 		t.Error("New() client not set correctly")
@@ -62,7 +62,7 @@ func TestHandleCommandQuit(t *testing.T) {
 	conv := conversation.New("test.pdf", "test content")
 
 	var output bytes.Buffer
-	repl := New(client, conv)
+	repl := New(client, conv, "")
 	repl.writer = &output
 
 	shouldExit := repl.handleCommand("quit")
@@ -92,7 +92,7 @@ func TestHandleCommandExit(t *testing.T) {
 	conv := conversation.New("test.pdf", "test content")
 
 	var output bytes.Buffer
-	repl := New(client, conv)
+	repl := New(client, conv, "")
 	repl.writer = &output
 
 	shouldExit := repl.handleCommand("EXIT")
@@ -121,7 +121,7 @@ func TestHandleCommandHistory(t *testing.T) {
 	conv.AddMessage("assistant", "test response")
 
 	var output bytes.Buffer
-	repl := New(client, conv)
+	repl := New(client, conv, "")
 	repl.writer = &output
 
 	shouldExit := repl.handleCommand("history")
@@ -159,7 +159,7 @@ func TestHandleCommandHistoryEmpty(t *testing.T) {
 	conv := conversation.New("test.pdf", "test content")
 
 	var output bytes.Buffer
-	repl := New(client, conv)
+	repl := New(client, conv, "")
 	repl.writer = &output
 
 	repl.handleCommand("history")
@@ -188,7 +188,7 @@ func TestSendMessage(t *testing.T) {
 	conv := conversation.New("test.pdf", "test content")
 
 	var output bytes.Buffer
-	repl := New(client, conv)
+	repl := New(client, conv, "")
 	repl.writer = &output
 
 	shouldExit := repl.sendMessage("test user message")
@@ -229,7 +229,7 @@ func TestSendMessageError(t *testing.T) {
 	conv := conversation.New("test.pdf", "test content")
 
 	var output bytes.Buffer
-	repl := New(client, conv)
+	repl := New(client, conv, "")
 	repl.writer = &output
 
 	shouldExit := repl.sendMessage("test message")

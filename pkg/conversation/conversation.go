@@ -1,6 +1,10 @@
 package conversation
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"fmt"
+	"path/filepath"
 	"time"
 
 	"papyrus/pkg/llm"
@@ -12,18 +16,39 @@ type Conversation struct {
 	FileName     string            `json:"file_name"`
 	Messages     []llm.ChatMessage `json:"messages"`
 	CreatedAt    time.Time         `json:"created_at"`
+	LastUpdated  time.Time         `json:"last_updated"`
 	SessionID    string            `json:"session_id,omitempty"`
 }
 
 // New creates a new conversation with a document.
 func New(fileName, documentText string) *Conversation {
+	now := time.Now()
 	return &Conversation{
 		DocumentText: documentText,
 		FileName:     fileName,
 		Messages:     []llm.ChatMessage{},
-		CreatedAt:    time.Now(),
-		SessionID:    "",
+		CreatedAt:    now,
+		LastUpdated:  now,
+		SessionID:    generateSessionID(fileName),
 	}
+}
+
+// generateSessionID creates a unique session ID from filename, timestamp, and random entropy.
+// Format: base-hash. Safely strips any file extension.
+func generateSessionID(fileName string) string {
+	// Safely strip directory and extension from filename
+	base := filepath.Base(fileName)
+	if ext := filepath.Ext(base); ext != "" {
+		base = base[:len(base)-len(ext)]
+	}
+	if base == "" || base == "." {
+		base = "session"
+	}
+	// Mix filename + nanosecond timestamp + random bytes for guaranteed uniqueness
+	rndBytes := make([]byte, 8)
+	_, _ = rand.Read(rndBytes)
+	hash := sha256.Sum256(append([]byte(fileName+time.Now().Format(time.RFC3339Nano)), rndBytes...))
+	return fmt.Sprintf("%s-%s", base, fmt.Sprintf("%x", hash)[:12])
 }
 
 // AddMessage adds a new message to the conversation.

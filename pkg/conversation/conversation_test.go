@@ -1,6 +1,7 @@
 package conversation
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -27,8 +28,8 @@ func TestNew(t *testing.T) {
 		t.Error("New() CreatedAt should not be zero")
 	}
 
-	if conv.SessionID != "" {
-		t.Errorf("New() SessionID = %q, want empty", conv.SessionID)
+	if conv.SessionID == "" {
+		t.Error("New() SessionID should not be empty")
 	}
 }
 
@@ -84,5 +85,44 @@ func TestGetHistory(t *testing.T) {
 	history[0].Content = "Modified"
 	if conv.Messages[0].Content == "Modified" {
 		t.Error("GetHistory() should return a copy, not a reference")
+	}
+}
+
+// TestGenerateSessionIDWithPDF handles standard PDF files.
+func TestGenerateSessionIDWithPDF(t *testing.T) {
+	conv := New("document.pdf", "")
+	if !strings.HasPrefix(conv.SessionID, "document-") {
+		t.Errorf("SessionID %q should start with 'document-'", conv.SessionID)
+	}
+}
+
+// TestGenerateSessionIDNonPDF handles non-PDF extensions without panic.
+func TestGenerateSessionIDNonPDF(t *testing.T) {
+	tests := []struct {
+		name     string
+		fileName string
+		prefix   string
+	}{
+		{"txt file", "notes.txt", "notes-"},
+		{"md file", "README.md", "README-"},
+		{"no extension", "myfile", "myfile-"},
+		{"multiple dots", "archive.tar.gz", "archive.tar-"},
+		{"path with dirs", "/home/user/docs/report.pdf", "report-"},
+		{"windows path", "C:\\Users\\docs\\report.pdf", "report-"},
+		{"dotfile", ".hidden", "session-"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conv := New(tt.fileName, "")
+			if !strings.HasPrefix(conv.SessionID, tt.prefix) {
+				t.Errorf("SessionID %q should start with %q", conv.SessionID, tt.prefix)
+			}
+			// Verify hash suffix is present (13 chars: dash + 12 hex)
+			parts := strings.SplitN(conv.SessionID, "-", 2)
+			if len(parts) < 2 || len(parts[1]) < 12 {
+				t.Errorf("SessionID %q missing valid hash suffix", conv.SessionID)
+			}
+		})
 	}
 }

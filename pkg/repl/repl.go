@@ -13,21 +13,23 @@ import (
 
 // REPL represents a read-eval-print loop for interactive conversations.
 type REPL struct {
-	client *llm.Client
-	conv   *conversation.Conversation
-	reader io.Reader
-	writer io.Writer
-	done   chan bool
+	client     *llm.Client
+	conv       *conversation.Conversation
+	reader     io.Reader
+	writer     io.Writer
+	done       chan bool
+	sessionDir string
 }
 
 // New creates a new REPL session.
-func New(client *llm.Client, conv *conversation.Conversation) *REPL {
+func New(client *llm.Client, conv *conversation.Conversation, sessionDir string) *REPL {
 	return &REPL{
-		client: client,
-		conv:   conv,
-		reader: os.Stdin,
-		writer: os.Stdout,
-		done:   make(chan bool),
+		client:     client,
+		conv:       conv,
+		reader:     os.Stdin,
+		writer:     os.Stdout,
+		done:       make(chan bool),
+		sessionDir: sessionDir,
 	}
 }
 
@@ -36,13 +38,16 @@ func (r *REPL) Start() error {
 	scanner := bufio.NewScanner(r.reader)
 
 	_, _ = fmt.Fprintln(r.writer, strings.Repeat("─", 60))
-	_, _ = fmt.Fprintln(r.writer, "Interactive mode. Type 'quit' or 'exit' to end, 'history' to see all messages.")
+	_, _ = fmt.Fprintln(r.writer, "Interactive mode. Commands: 'quit', 'exit', 'history', 'save', 'session info'")
 	_, _ = fmt.Fprintln(r.writer, strings.Repeat("─", 60))
 
 	for {
 		_, _ = fmt.Fprint(r.writer, "\n> ")
 		if !scanner.Scan() {
-			// EOF reached
+			// EOF reached - auto-save on exit
+			if err := r.saveSession(); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: auto-save failed: %v\n", err)
+			}
 			break
 		}
 
@@ -60,16 +65,28 @@ func (r *REPL) Start() error {
 	return scanner.Err()
 }
 
-// handleCommand processes built-in commands like quit, exit, and history.
+// handleCommand processes built-in commands like quit, exit, history, save.
 // Returns true if the REPL should exit.
 func (r *REPL) handleCommand(input string) bool {
-	switch strings.ToLower(input) {
+	lowerInput := strings.ToLower(input)
+
+	switch lowerInput {
 	case "quit", "exit":
+		// Save before exiting
+		_ = r.saveSession()
 		_, _ = fmt.Fprintln(r.writer, "Goodbye!")
 		return true
 
 	case "history":
 		r.printHistory()
+		return false
+
+	case "save":
+		_ = r.saveSession()
+		return false
+
+	case "session info":
+		r.printSessionInfo()
 		return false
 
 	default:
@@ -114,4 +131,27 @@ func (r *REPL) printHistory() {
 		_, _ = fmt.Fprintln(r.writer, msg.Content)
 	}
 	_, _ = fmt.Fprintln(r.writer, "\n=== End of History ===")
+}
+
+// saveSession saves the current conversation to disk.
+func (r *REPL) saveSession() error {
+	if err := conversation.SaveSession(r.conv, r.sessionDir); err != nil {
+		_, _ = fmt.Fprintf(r.writer, "Error saving session: %v\n", err)
+		return err
+	}
+	_, _ = fmt.Fprintf(r.writer, "[Session] Saved to '%s'\n", r.conv.SessionID)
+	return nil
+}
+
+// printSessionInfo displays metadata about the current session.
+func (r *REPL) printSessionInfo() {
+	_, _ = fmt.Fprintln(r.writer, "")
+	_, _ = fmt.Fprintln(r.writer, "=== Session Info ===")
+	_, _ = fmt.Fprintf(r.writer, "Session ID:    %s\n", r.conv.SessionID)
+	_, _ = fmt.Fprintf(r.writer, "File:          %s\n", r.conv.FileName)
+	_, _ = fmt.Fprintf(r.writer, "Created:       %s\n", r.conv.CreatedAt.Format("2006-01-02 15:04:05"))
+	_, _ = fmt.Fprintf(r.writer, "Last Updated:  %s\n", r.conv.LastUpdated.Format("2006-01-02 15:04:05"))
+	_, _ = fmt.Fprintf(r.writer, "Messages:      %d\n", len(r.conv.Messages))
+	_, _ = fmt.Fprintf(r.writer, "Doc Size:      %d bytes\n", len(r.conv.DocumentText))
+	_, _ = fmt.Fprintln(r.writer, "=== End Info ===")
 }
