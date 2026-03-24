@@ -18,12 +18,21 @@ until curl -s "$OLLAMA_HOST/api/tags" > /dev/null; do
 done
 
 echo "✅ Ollama is up! Starting processing..."
-PDF_FILE_PATH="${PDF_FILE:-pdfs/test.pdf}"
+
+# In Docker, pdfs are mounted at /pdfs. Otherwise use pdfs/ from current directory
+if [ -d /pdfs ]; then
+  PDF_DEFAULT="/pdfs/test.pdf"
+else
+  PDF_DEFAULT="pdfs/test.pdf"
+fi
+
+PDF_FILE_PATH="${PDF_FILE:-$PDF_DEFAULT}"
 
 # Check if the file exists
 if [ ! -f "$PDF_FILE_PATH" ]; then
   echo "--------------------------------------------------------"
   echo "Error: PDF file not found at: $PDF_FILE_PATH"
+  echo "Available locations checked: $PDF_DEFAULT"
   echo "--------------------------------------------------------"
   exit 0
 fi

@@ -11,7 +11,7 @@ BINARY  = $(BIN_DIR)/papyrus
 
 .DEFAULT_GOAL := help
 
-.PHONY: help deps lint test build clean up run-pdf run ship
+.PHONY: help deps lint test build clean up down run-pdf run docker-build
 
 help: ## Show available targets
 	@printf '\033[36m  %-10s\033[0m %s\n' \
@@ -21,19 +21,24 @@ help: ## Show available targets
 		"test"  "Run tests" \
 		"build" "Build binary for GOOS/GOARCH (default: linux/amd64)" \
 		"clean" "Remove bin directory" \
-		"up"    "Run docker-compose (v1.29.0) stack using .env" \
-		"run-pdf" "Run papyrus on a PDF file (e.g., make run-pdf PDF_FILE=pdfs/test.pdf)" \
-		"run"   "Build and run locally" \
-		"ship"  "Build and tag Docker image"
+		"up"    "Start Ollama + Papyrus stack (docker-compose up)" \
+		"down"  "Stop and remove containers (docker-compose down)" \
+		"run-pdf" "Analyze a PDF (runs in Docker; requires 'make up' first)" \
+		"run"   "Build and run binary locally (requires local Ollama)" \
+		"docker-build" "Build Docker image"
 
-up: ## Run docker-compose stack
-	@echo "Cleaning up previous containers and running docker-compose (v1.29.0) stack..."
-	@docker-compose down -v
+up: ## Start Ollama + Papyrus stack
+	@echo "Starting docker-compose stack (Ollama + Papyrus)..."
 	@docker-compose up --build
 
-run-pdf: ## Run papyrus on a PDF file
-	@if [ -z "$(PDF_FILE)" ]; then echo "Error: PDF_FILE is not set. Usage: make run-pdf PDF_FILE=pdfs/file.pdf"; exit 1; fi
-	@docker-compose run --rm papyrus /$(PDF_FILE)
+down: ## Stop and remove containers
+	@echo "Stopping docker-compose stack..."
+	@docker-compose down
+
+run-pdf: ## Analyze a PDF with override (use: make run-pdf PDF_FILE=pdfs/myfile.pdf CUSTOM_PROMPT="Your custom prompt")
+	@if [ -z "$(PDF_FILE)" ]; then echo "Error: PDF_FILE not specified. Usage: make run-pdf PDF_FILE=pdfs/myfile.pdf"; exit 1; fi
+	@echo "Analyzing PDF: $(PDF_FILE)"
+	@docker-compose run --rm papyrus /$(PDF_FILE) "$(CUSTOM_PROMPT)"
 
 deps: ## Download and tidy dependencies
 	@echo "Tidying dependencies..."
@@ -61,6 +66,10 @@ build: ## Build binary for GOOS/GOARCH (default: linux/amd64)
 clean: ## Remove bin directory
 	@rm -rf bin
 
-run: build ## Build and run locally
-	@echo "Running $(BINARY)..."
-	@./$(BINARY) $(ARGS)
+run: build ## Build and run binary locally (requires local Ollama on localhost:11434)
+	@echo "Running $(BINARY) locally..."
+	@OLLAMA_URL=http://localhost:11434 ./$(BINARY) $(ARGS)
+
+docker-build: ## Build Docker image
+	@echo "Building Docker image..."
+	@docker build -t papyrus:latest .

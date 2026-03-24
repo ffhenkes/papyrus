@@ -14,8 +14,8 @@ RUN go mod tidy && go build -o papyrus -ldflags="-s -w" .
 # Stage 2: Minimal runtime image
 FROM alpine:3.19
 
-# Install bash (required for your script) and dos2unix (to fix Windows line endings)
-RUN apk add --no-cache ca-certificates bash dos2unix
+# Install bash (required for script), curl (for Ollama health check), and dos2unix (for Windows line endings)
+RUN apk add --no-cache ca-certificates bash curl dos2unix
 
 WORKDIR /app
 
