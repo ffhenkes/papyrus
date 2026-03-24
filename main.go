@@ -44,6 +44,42 @@ type ChatResponse struct {
 	Error   string      `json:"error,omitempty"`
 }
 
+// --- Conversation State Management ---
+
+type Conversation struct {
+	DocumentText string        `json:"document_text"`
+	FileName     string        `json:"file_name"`
+	Messages     []ChatMessage `json:"messages"`
+	CreatedAt    time.Time     `json:"created_at"`
+	SessionID    string        `json:"session_id,omitempty"`
+}
+
+// NewConversation creates a new conversation with a document
+func NewConversation(fileName, documentText string) *Conversation {
+	return &Conversation{
+		DocumentText: documentText,
+		FileName:     fileName,
+		Messages:     []ChatMessage{},
+		CreatedAt:    time.Now(),
+		SessionID:    "",
+	}
+}
+
+// AddMessage adds a new message to the conversation
+func AddMessage(conv *Conversation, role, content string) {
+	conv.Messages = append(conv.Messages, ChatMessage{
+		Role:    role,
+		Content: content,
+	})
+}
+
+// GetHistory returns a copy of the message history
+func GetHistory(conv *Conversation) []ChatMessage {
+	history := make([]ChatMessage, len(conv.Messages))
+	copy(history, conv.Messages)
+	return history
+}
+
 // --- Main ---
 
 func main() {
@@ -78,7 +114,19 @@ func main() {
 	fmt.Printf("# Papyrus → %s (%s)...\n", ollamaURL, modelName)
 	fmt.Println(strings.Repeat("─", 60))
 
-	explanation, err := explainText(ollamaURL, modelName, text, customPrompt)
+	// Create conversation with the PDF document
+	conv := NewConversation(pdfPath, text)
+
+	// Prepare initial prompt with document context
+	userPrompt := "Please read the following document content and provide a clear, comprehensive explanation of its contents."
+	if customPrompt != "" {
+		userPrompt = customPrompt
+	}
+
+	fullUserMessage := fmt.Sprintf("%s\n\n<document>\n%s\n</document>", userPrompt, text)
+
+	// Send initial message (this also adds it to conversation history)
+	explanation, err := sendMessage(ollamaURL, modelName, conv, fullUserMessage)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -213,10 +261,101 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 
 	if chatResp.Error != "" {
 		if strings.Contains(chatResp.Error, "model") && strings.Contains(chatResp.Error, "not found") {
-			return "", fmt.Errorf("Ollama model '%s' not found. Please run 'ollama pull %s' inside the Ollama container or on your host (error: %s)", modelName, modelName, chatResp.Error)
+			return "", fmt.Errorf("ollama model '%s' not found. Please run 'ollama pull %s' inside the Ollama container or on your host (error: %s)", modelName, modelName, chatResp.Error)
 		}
 		return "", fmt.Errorf("ollama error: %s", chatResp.Error)
 	}
+
+	return chatResp.Message.Content, nil
+}
+
+// --- Ollama API Call with Conversation History ---
+
+func sendMessage(ollamaURL, modelName string, conv *Conversation, userMessage string) (string, error) {
+	// Add user message to conversation
+	AddMessage(conv, "user", userMessage)
+
+	// Build request with full conversation history
+	req := ChatRequest{
+		Model:  modelName,
+		Stream: false,
+		Options: ChatOptions{
+			NumPredict: maxTokens,
+		},
+		Messages: []ChatMessage{
+			{
+				Role: "system",
+				Content: `You are an expert document analyst. When given document content, you:
+1. Identify the document type and purpose
+2. Summarize the key topics and main points clearly
+3. Highlight important details, data, or findings
+4. Explain any technical concepts in accessible language
+5. Note the document structure and how it's organized
+
+Be thorough but concise. Use bullet points and sections to organize your explanation.`,
+			},
+		},
+	}
+
+	// Append all previous messages (conversation history)
+	for _, msg := range GetHistory(conv) {
+		// Skip previous document context; include only the message content
+		req.Messages = append(req.Messages, ChatMessage{
+			Role:    msg.Role,
+			Content: msg.Content,
+		})
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	endpoint := strings.TrimRight(ollamaURL, "/") + "/api/chat"
+	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Show progress spinner while waiting for LLM response
+	done := make(chan bool)
+	go spinner(done, modelName)
+
+	client := &http.Client{}
+	resp, err := client.Do(httpReq)
+	close(done)
+	time.Sleep(100 * time.Millisecond) // Allow spinner to finish printing
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\r") // Clear spinner line
+		return "", fmt.Errorf("could not reach Ollama at %s — is it running? (%w)", ollamaURL, err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
+		}
+	}()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var chatResp ChatResponse
+	if err := json.Unmarshal(respBody, &chatResp); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w\nraw: %s", err, string(respBody))
+	}
+
+	if chatResp.Error != "" {
+		if strings.Contains(chatResp.Error, "model") && strings.Contains(chatResp.Error, "not found") {
+			return "", fmt.Errorf("ollama model '%s' not found. Please run 'ollama pull %s' inside the Ollama container or on your host (error: %s)", modelName, modelName, chatResp.Error)
+		}
+		return "", fmt.Errorf("ollama error: %s", chatResp.Error)
+	}
+
+	// Add assistant response to conversation
+	AddMessage(conv, "assistant", chatResp.Message.Content)
 
 	return chatResp.Message.Content, nil
 }

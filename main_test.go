@@ -226,3 +226,220 @@ func BenchmarkExplainText(b *testing.B) {
 		explainText(server.URL, "test-model", testText, "")
 	}
 }
+
+// --- Test: NewConversation creates conversation with correct initial state ---
+func TestNewConversation(t *testing.T) {
+	fileName := "test.pdf"
+	docText := "Sample document text"
+
+	conv := NewConversation(fileName, docText)
+
+	if conv.FileName != fileName {
+		t.Errorf("NewConversation() FileName = %q, want %q", conv.FileName, fileName)
+	}
+
+	if conv.DocumentText != docText {
+		t.Errorf("NewConversation() DocumentText = %q, want %q", conv.DocumentText, docText)
+	}
+
+	if len(conv.Messages) != 0 {
+		t.Errorf("NewConversation() Messages length = %d, want 0", len(conv.Messages))
+	}
+
+	if conv.CreatedAt.IsZero() {
+		t.Error("NewConversation() CreatedAt should not be zero")
+	}
+
+	if conv.SessionID != "" {
+		t.Errorf("NewConversation() SessionID = %q, want empty", conv.SessionID)
+	}
+}
+
+// --- Test: AddMessage appends message to conversation ---
+func TestAddMessage(t *testing.T) {
+	conv := NewConversation("test.pdf", "test content")
+
+	AddMessage(conv, "user", "First question")
+	if len(conv.Messages) != 1 {
+		t.Errorf("After first AddMessage, length = %d, want 1", len(conv.Messages))
+	}
+
+	if conv.Messages[0].Role != "user" {
+		t.Errorf("First message role = %q, want 'user'", conv.Messages[0].Role)
+	}
+
+	if conv.Messages[0].Content != "First question" {
+		t.Errorf("First message content = %q, want 'First question'", conv.Messages[0].Content)
+	}
+
+	AddMessage(conv, "assistant", "First answer")
+	if len(conv.Messages) != 2 {
+		t.Errorf("After second AddMessage, length = %d, want 2", len(conv.Messages))
+	}
+
+	if conv.Messages[1].Role != "assistant" {
+		t.Errorf("Second message role = %q, want 'assistant'", conv.Messages[1].Role)
+	}
+}
+
+// --- Test: GetHistory returns copy of messages ---
+func TestGetHistory(t *testing.T) {
+	conv := NewConversation("test.pdf", "test content")
+
+	AddMessage(conv, "user", "Question 1")
+	AddMessage(conv, "assistant", "Answer 1")
+
+	history := GetHistory(conv)
+
+	if len(history) != 2 {
+		t.Errorf("GetHistory() length = %d, want 2", len(history))
+	}
+
+	if history[0].Content != "Question 1" {
+		t.Errorf("GetHistory()[0].Content = %q, want 'Question 1'", history[0].Content)
+	}
+
+	if history[1].Content != "Answer 1" {
+		t.Errorf("GetHistory()[1].Content = %q, want 'Answer 1'", history[1].Content)
+	}
+
+	// Verify it's a copy (modifying history shouldn't affect conversation)
+	history[0].Content = "Modified"
+	if conv.Messages[0].Content == "Modified" {
+		t.Error("GetHistory() should return a copy, not a reference")
+	}
+}
+
+// --- Test: sendMessage adds user and assistant messages to conversation ---
+func TestSendMessage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("Failed to decode request: %v", err)
+		}
+
+		// Verify system message is present
+		if len(req.Messages) < 1 || req.Messages[0].Role != "system" {
+			t.Errorf("Expected system message first, got %d messages", len(req.Messages))
+		}
+
+		resp := ChatResponse{
+			Message: ChatMessage{
+				Role:    "assistant",
+				Content: "Test response",
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	conv := NewConversation("test.pdf", "test document content")
+
+	response, err := sendMessage(server.URL, "test-model", conv, "Test question")
+
+	if err != nil {
+		t.Fatalf("sendMessage() returned error: %v", err)
+	}
+
+	if response != "Test response" {
+		t.Errorf("sendMessage() = %q, want 'Test response'", response)
+	}
+
+	// Verify message was added to conversation
+	if len(conv.Messages) != 2 {
+		t.Errorf("After sendMessage, Messages length = %d, want 2", len(conv.Messages))
+	}
+
+	if conv.Messages[0].Role != "user" || conv.Messages[0].Content != "Test question" {
+		t.Error("User message not properly added to conversation")
+	}
+
+	if conv.Messages[1].Role != "assistant" || conv.Messages[1].Content != "Test response" {
+		t.Error("Assistant message not properly added to conversation")
+	}
+}
+
+// --- Test: sendMessage preserves conversation history ---
+func TestSendMessagePreservesHistory(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ChatRequest
+		json.NewDecoder(r.Body).Decode(&req)
+
+		callCount++
+
+		// First call: expect system + new user message
+		// Second call: expect system + previous user + previous assistant + new user message
+		if callCount == 1 && len(req.Messages) < 2 {
+			t.Errorf("First call: Expected at least 2 messages, got %d", len(req.Messages))
+		}
+		if callCount == 2 && len(req.Messages) < 4 {
+			t.Errorf("Second call: Expected at least 4 messages (history), got %d", len(req.Messages))
+		}
+
+		var response string
+		if callCount == 1 {
+			response = "First response"
+		} else {
+			response = "Second response"
+		}
+
+		resp := ChatResponse{
+			Message: ChatMessage{
+				Role:    "assistant",
+				Content: response,
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	conv := NewConversation("test.pdf", "test content")
+
+	// First message
+	response1, err := sendMessage(server.URL, "test-model", conv, "First question")
+	if err != nil {
+		t.Fatalf("First sendMessage() failed: %v", err)
+	}
+
+	if response1 != "First response" {
+		t.Errorf("First response = %q, want 'First response'", response1)
+	}
+
+	if len(conv.Messages) != 2 {
+		t.Errorf("After first sendMessage, Messages length = %d, want 2", len(conv.Messages))
+	}
+
+	// Second message (should include first in history)
+	response2, err := sendMessage(server.URL, "test-model", conv, "Follow-up question")
+	if err != nil {
+		t.Fatalf("Second sendMessage() failed: %v", err)
+	}
+
+	if response2 != "Second response" {
+		t.Errorf("Second response = %q, want 'Second response'", response2)
+	}
+
+	if len(conv.Messages) != 4 {
+		t.Errorf("After second sendMessage, Messages length = %d, want 4", len(conv.Messages))
+	}
+
+	// Verify order
+	if conv.Messages[0].Content != "First question" {
+		t.Error("First message not preserved in history")
+	}
+
+	if conv.Messages[1].Content != "First response" {
+		t.Error("First assistant response not preserved")
+	}
+
+	if conv.Messages[2].Content != "Follow-up question" {
+		t.Error("Second user message not added")
+	}
+
+	if conv.Messages[3].Content != "Second response" {
+		t.Error("Second assistant response not added")
+	}
+}
