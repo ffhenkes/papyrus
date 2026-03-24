@@ -19,10 +19,12 @@ type REPL struct {
 	writer     io.Writer
 	done       chan bool
 	sessionDir string
+	stats      llm.TokenStats
+	maxContext int
 }
 
 // New creates a new REPL session.
-func New(client *llm.Client, conv *conversation.Conversation, sessionDir string) *REPL {
+func New(client *llm.Client, conv *conversation.Conversation, sessionDir string, maxContext int) *REPL {
 	return &REPL{
 		client:     client,
 		conv:       conv,
@@ -30,6 +32,7 @@ func New(client *llm.Client, conv *conversation.Conversation, sessionDir string)
 		writer:     os.Stdout,
 		done:       make(chan bool),
 		sessionDir: sessionDir,
+		maxContext: maxContext,
 	}
 }
 
@@ -89,6 +92,10 @@ func (r *REPL) handleCommand(input string) bool {
 		r.printSessionInfo()
 		return false
 
+	case "stats":
+		r.printStats()
+		return false
+
 	default:
 		// Regular message - send to LLM
 		return r.sendMessage(input)
@@ -97,8 +104,21 @@ func (r *REPL) handleCommand(input string) bool {
 
 // sendMessage sends a user message to the LLM and appends the response to conversation.
 func (r *REPL) sendMessage(userMessage string) bool {
+	// Apply context pruning before sending
+	var summary string
+	r.conv.Messages, summary = conversation.PruneHistory(r.conv.Messages, r.maxContext)
+	if summary != "" {
+		_, _ = fmt.Fprintf(r.writer, "[Context] Pruned older messages to stay under %d tokens.\n", r.maxContext)
+	}
+
+	history := r.conv.GetHistory()
+	if summary != "" {
+		// Prepend summary as a system message so the LLM retains old context
+		history = append([]llm.ChatMessage{{Role: "system", Content: summary}}, history...)
+	}
+
 	// Use SendMessageWithDoc to avoid re-sending the document with each follow-up
-	response, err := r.client.SendMessageWithDoc(r.conv.GetHistory(), userMessage, r.client.DocumentText)
+	response, stats, err := r.client.SendMessageWithDoc(history, userMessage, r.client.DocumentText)
 	if err != nil {
 		_, _ = fmt.Fprintf(r.writer, "Error: %v\n", err)
 		return false
@@ -108,9 +128,13 @@ func (r *REPL) sendMessage(userMessage string) bool {
 	r.conv.AddMessage("user", userMessage)
 	r.conv.AddMessage("assistant", response)
 
+	// Accumulate stats
+	r.stats.Add(stats)
+
 	// Display response
 	_, _ = fmt.Fprintln(r.writer, "")
 	_, _ = fmt.Fprintln(r.writer, response)
+	_, _ = fmt.Fprintln(r.writer, "\n"+llm.FormatTokenStats(stats))
 
 	return false
 }
@@ -154,4 +178,14 @@ func (r *REPL) printSessionInfo() {
 	_, _ = fmt.Fprintf(r.writer, "Messages:      %d\n", len(r.conv.Messages))
 	_, _ = fmt.Fprintf(r.writer, "Doc Size:      %d bytes\n", len(r.conv.DocumentText))
 	_, _ = fmt.Fprintln(r.writer, "=== End Info ===")
+}
+
+// printStats displays cumulative token usage for the session.
+func (r *REPL) printStats() {
+	_, _ = fmt.Fprintln(r.writer, "")
+	_, _ = fmt.Fprintln(r.writer, "=== Session Token Stats ===")
+	_, _ = fmt.Fprintf(r.writer, "Total Inputs:    %d tokens\n", r.stats.InputTokens)
+	_, _ = fmt.Fprintf(r.writer, "Total Outputs:   %d tokens\n", r.stats.OutputTokens)
+	_, _ = fmt.Fprintf(r.writer, "Total Usage:     %d tokens\n", r.stats.TotalTokens)
+	_, _ = fmt.Fprintln(r.writer, "=== End Stats ===")
 }

@@ -41,7 +41,8 @@ type Client struct {
 	URL          string
 	ModelName    string
 	MaxTokens    int
-	DocumentText string // Document text stored once to avoid resending on each follow-up
+	DocumentText string         // Document text stored once to avoid resending on each follow-up
+	Cache        *ResponseCache // Optional response cache
 }
 
 // NewClient creates a new Ollama API client.
@@ -54,7 +55,22 @@ func NewClient(url, modelName string, maxTokens int) *Client {
 }
 
 // SendMessage sends a message to Ollama with conversation history.
-func (c *Client) SendMessage(messages []ChatMessage, userMessage string) (string, error) {
+func (c *Client) SendMessage(messages []ChatMessage, userMessage string) (string, TokenStats, error) {
+	// Check cache
+	if c.Cache != nil {
+		cacheKey := NormalizeKey(userMessage)
+		if cachedResponse, found := c.Cache.Get(cacheKey); found {
+			fmt.Fprintf(os.Stderr, "\r[OK] Retrieved from cache (instant)              \n")
+			stats := TokenStats{
+				InputTokens:  EstimateTokens(userMessage),
+				OutputTokens: EstimateTokens(cachedResponse),
+				TotalTokens:  EstimateTokens(userMessage) + EstimateTokens(cachedResponse),
+				TokensPerSec: 0,
+			}
+			return cachedResponse, stats, nil
+		}
+	}
+
 	// Build request with full conversation history
 	req := ChatRequest{
 		Model:  c.ModelName,
@@ -88,13 +104,13 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 
 	body, err := json.Marshal(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal request: %w", err)
+		return "", TokenStats{}, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	endpoint := strings.TrimRight(c.URL, "/") + "/api/chat"
 	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return "", TokenStats{}, fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
@@ -110,7 +126,7 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\r") // Clear spinner line
-		return "", fmt.Errorf("could not reach Ollama at %s — is it running? (%w)", c.URL, err)
+		return "", TokenStats{}, fmt.Errorf("could not reach Ollama at %s — is it running? (%w)", c.URL, err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -120,27 +136,57 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
+		return "", TokenStats{}, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	var chatResp ChatResponse
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w\nraw: %s", err, string(respBody))
+		return "", TokenStats{}, fmt.Errorf("failed to parse response: %w\nraw: %s", err, string(respBody))
 	}
 
 	if chatResp.Error != "" {
 		if strings.Contains(chatResp.Error, "model") && strings.Contains(chatResp.Error, "not found") {
-			return "", fmt.Errorf("ollama model '%s' not found. Please run 'ollama pull %s' inside the Ollama container or on your host (error: %s)", c.ModelName, c.ModelName, chatResp.Error)
+			return "", TokenStats{}, fmt.Errorf("ollama model '%s' not found. Please run 'ollama pull %s' inside the Ollama container or on your host (error: %s)", c.ModelName, c.ModelName, chatResp.Error)
 		}
-		return "", fmt.Errorf("ollama error: %s", chatResp.Error)
+		return "", TokenStats{}, fmt.Errorf("ollama error: %s", chatResp.Error)
 	}
 
-	return chatResp.Message.Content, nil
+	duration := time.Since(startTime).Seconds()
+	historyText := ""
+	for _, m := range messages {
+		historyText += m.Content + " "
+	}
+	inputTokens := EstimateTokens(historyText + userMessage)
+	outputTokens := EstimateTokens(chatResp.Message.Content)
+
+	stats := TokenStats{
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalTokens:  inputTokens + outputTokens,
+		TokensPerSec: float64(outputTokens) / duration,
+	}
+
+	return chatResp.Message.Content, stats, nil
 }
 
 // SendMessageWithDoc sends a message with document context without embedding document in history.
 // This prevents re-sending the entire document with every follow-up question.
-func (c *Client) SendMessageWithDoc(messages []ChatMessage, userMessage, documentContext string) (string, error) {
+func (c *Client) SendMessageWithDoc(messages []ChatMessage, userMessage, documentContext string) (string, TokenStats, error) {
+	// Check cache
+	if c.Cache != nil {
+		cacheKey := NormalizeKey(userMessage)
+		if cachedResponse, found := c.Cache.Get(cacheKey); found {
+			fmt.Fprintf(os.Stderr, "\r[OK] Retrieved from cache (instant)              \n")
+			stats := TokenStats{
+				InputTokens:  EstimateTokens(documentContext + " " + userMessage),
+				OutputTokens: EstimateTokens(cachedResponse),
+				TotalTokens:  EstimateTokens(documentContext+" "+userMessage) + EstimateTokens(cachedResponse),
+				TokensPerSec: 0,
+			}
+			return cachedResponse, stats, nil
+		}
+	}
+
 	// Build request with full conversation history (without embedded document)
 	systemPrompt := `You are an expert document analyst. When given document content, you:
 1. Identify the document type and purpose
@@ -181,13 +227,13 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 
 	body, err := json.Marshal(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal request: %w", err)
+		return "", TokenStats{}, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	endpoint := strings.TrimRight(c.URL, "/") + "/api/chat"
 	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return "", TokenStats{}, fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
@@ -203,7 +249,7 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\r") // Clear spinner line
-		return "", fmt.Errorf("could not reach Ollama at %s — is it running? (%w)", c.URL, err)
+		return "", TokenStats{}, fmt.Errorf("could not reach Ollama at %s — is it running? (%w)", c.URL, err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -213,22 +259,37 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
+		return "", TokenStats{}, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	var chatResp ChatResponse
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w\nraw: %s", err, string(respBody))
+		return "", TokenStats{}, fmt.Errorf("failed to parse response: %w\nraw: %s", err, string(respBody))
 	}
 
 	if chatResp.Error != "" {
 		if strings.Contains(chatResp.Error, "model") && strings.Contains(chatResp.Error, "not found") {
-			return "", fmt.Errorf("ollama model '%s' not found. Please run 'ollama pull %s' inside the Ollama container or on your host (error: %s)", c.ModelName, c.ModelName, chatResp.Error)
+			return "", TokenStats{}, fmt.Errorf("ollama model '%s' not found. Please run 'ollama pull %s' inside the Ollama container or on your host (error: %s)", c.ModelName, c.ModelName, chatResp.Error)
 		}
-		return "", fmt.Errorf("ollama error: %s", chatResp.Error)
+		return "", TokenStats{}, fmt.Errorf("ollama error: %s", chatResp.Error)
 	}
 
-	return chatResp.Message.Content, nil
+	duration := time.Since(startTime).Seconds()
+	historyText := ""
+	for _, m := range messages {
+		historyText += m.Content + " "
+	}
+	inputTokens := EstimateTokens(documentContext + " " + historyText + userMessage)
+	outputTokens := EstimateTokens(chatResp.Message.Content)
+
+	stats := TokenStats{
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalTokens:  inputTokens + outputTokens,
+		TokensPerSec: float64(outputTokens) / duration,
+	}
+
+	return chatResp.Message.Content, stats, nil
 }
 
 // formatDuration returns a human-readable string of the elapsed time.
