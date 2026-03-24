@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ledongthuc/pdf"
 )
@@ -61,7 +62,7 @@ func main() {
 	ollamaURL := getEnv("OLLAMA_URL", defaultOllamaURL)
 	modelName := getEnv("OLLAMA_MODEL", defaultModel)
 
-	fmt.Printf("📄 Reading PDF: %s\n", pdfPath)
+	fmt.Printf("[PDF] Reading PDF: %s\n", pdfPath)
 	text, err := extractPDFText(pdfPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error extracting PDF text: %v\n", err)
@@ -116,6 +117,24 @@ func extractPDFText(pdfPath string) (string, error) {
 	return sb.String(), nil
 }
 
+// --- Progress Spinner ---
+
+func spinner(done chan bool, modelName string) {
+	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	i := 0
+	for {
+		select {
+		case <-done:
+			fmt.Fprintf(os.Stderr, "\r[OK] Analysis complete!              \n")
+			return
+		default:
+			fmt.Fprintf(os.Stderr, "\r[..] %s Processing with %s...", frames[i%len(frames)], modelName)
+			i++
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+}
+
 // --- Ollama API Call ---
 
 func explainText(ollamaURL, modelName, text, customPrompt string) (string, error) {
@@ -163,9 +182,17 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
+	// Show progress spinner while waiting for LLM response
+	done := make(chan bool)
+	go spinner(done, modelName)
+
 	client := &http.Client{}
 	resp, err := client.Do(httpReq)
+	close(done)
+	time.Sleep(100 * time.Millisecond) // Allow spinner to finish printing
+
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "\r") // Clear spinner line
 		return "", fmt.Errorf("could not reach Ollama at %s — is it running? (%w)", ollamaURL, err)
 	}
 	defer func() {

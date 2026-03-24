@@ -10,14 +10,14 @@ fi
 # Define the endpoint
 OLLAMA_HOST="${OLLAMA_URL:-http://ollama:11434}"
 
-echo "⏳ Waiting for Ollama ($OLLAMA_HOST) to be ready..."
+echo "X Waiting for Ollama ($OLLAMA_HOST) to be ready..."
 
 # Loop until Ollama responds with a 200 OK
 until curl -s "$OLLAMA_HOST/api/tags" > /dev/null; do
   sleep 2
 done
 
-echo "✅ Ollama is up! Starting processing..."
+echo "!! Ollama is up! Starting processing..."
 
 # In Docker, pdfs are mounted at /pdfs. Otherwise use pdfs/ from current directory
 if [ -d /pdfs ]; then
