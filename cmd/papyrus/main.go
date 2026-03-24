@@ -9,6 +9,7 @@ import (
 	"papyrus/pkg/conversation"
 	"papyrus/pkg/llm"
 	"papyrus/pkg/pdf"
+	"papyrus/pkg/repl"
 )
 
 func main() {
@@ -64,11 +65,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Add messages to conversation for future multi-turn support
+	// Add messages to conversation for multi-turn support
 	conv.AddMessage("user", fullUserMessage)
 	conv.AddMessage("assistant", explanation)
 
 	fmt.Println(explanation)
+
+	// Enter interactive REPL mode for follow-up questions
+	r := repl.New(client, conv)
+	if err := r.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "REPL error: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 // getEnv retrieves an environment variable with a fallback value.
