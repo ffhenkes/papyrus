@@ -61,7 +61,7 @@ test: ## Run tests
 build: ## Build binary for GOOS/GOARCH (default: linux/amd64)
 	@mkdir -p $(BIN_DIR)
 	@echo "Building $(BINARY)..."
-	@GOARCH=$(GOARCH) GOOS=$(GOOS) CGO_ENABLED=0 go build -ldflags="-s -w" -o $(BINARY) .
+	@GOARCH=$(GOARCH) GOOS=$(GOOS) CGO_ENABLED=0 go build -ldflags="-s -w" -o $(BINARY) ./cmd/papyrus
 
 clean: ## Remove bin directory
 	@rm -rf bin

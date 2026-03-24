@@ -5,11 +5,11 @@ RUN apk add --no-cache git
 
 WORKDIR /app
 
-COPY go.mod ./
+COPY go.mod go.sum ./
 RUN go mod download || true
 
-COPY main.go ./
-RUN go mod tidy && go build -o papyrus -ldflags="-s -w" .
+COPY . ./
+RUN go mod tidy && go build -o papyrus -ldflags="-s -w" ./cmd/papyrus
 
 # Stage 2: Minimal runtime image
 FROM alpine:3.19
