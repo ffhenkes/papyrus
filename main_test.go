@@ -13,7 +13,7 @@ import (
 // --- Test: getEnv with fallback ---
 func TestGetEnvWithoutVariable(t *testing.T) {
 	// Ensure variable doesn't exist
-	os.Unsetenv("TEST_VAR_NONEXISTENT")
+	_ = os.Unsetenv("TEST_VAR_NONEXISTENT")
 
 	result := getEnv("TEST_VAR_NONEXISTENT", "fallback_value")
 	if result != "fallback_value" {
@@ -23,8 +23,8 @@ func TestGetEnvWithoutVariable(t *testing.T) {
 
 // --- Test: getEnv with set variable ---
 func TestGetEnvWithVariable(t *testing.T) {
-	os.Setenv("TEST_VAR_EXISTS", "actual_value")
-	defer os.Unsetenv("TEST_VAR_EXISTS")
+	_ = os.Setenv("TEST_VAR_EXISTS", "actual_value")
+	defer func() { _ = os.Unsetenv("TEST_VAR_EXISTS") }()
 
 	result := getEnv("TEST_VAR_EXISTS", "fallback_value")
 	if result != "actual_value" {
@@ -34,8 +34,8 @@ func TestGetEnvWithVariable(t *testing.T) {
 
 // --- Test: getEnv with empty string ---
 func TestGetEnvEmptyString(t *testing.T) {
-	os.Setenv("TEST_EMPTY", "")
-	defer os.Unsetenv("TEST_EMPTY")
+	_ = os.Setenv("TEST_EMPTY", "")
+	defer func() { _ = os.Unsetenv("TEST_EMPTY") }()
 
 	result := getEnv("TEST_EMPTY", "fallback_value")
 	if result != "fallback_value" {
@@ -53,7 +53,7 @@ func TestPrintUsage(t *testing.T) {
 	// Should not panic
 	printUsage()
 
-	w.Close()
+	_ = w.Close()
 	os.Stderr = old
 
 	// Read output
@@ -107,7 +107,7 @@ func TestExplainTextSuccess(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -127,7 +127,7 @@ func TestExplainTextSuccess(t *testing.T) {
 func TestExplainTextCustomPrompt(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ChatRequest
-		json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewDecoder(r.Body).Decode(&req)
 
 		// Verify custom prompt is in user message
 		userMessage := req.Messages[1]
@@ -142,7 +142,7 @@ func TestExplainTextCustomPrompt(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -163,7 +163,7 @@ func TestExplainTextAPIError(t *testing.T) {
 			Error: "model not found",
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -184,7 +184,7 @@ func TestExplainTextConnectionError(t *testing.T) {
 // --- Test: explainText with invalid JSON response ---
 func TestExplainTextInvalidJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("invalid json response"))
+		_, _ = w.Write([]byte("invalid json response"))
 	}))
 	defer server.Close()
 
@@ -196,8 +196,8 @@ func TestExplainTextInvalidJSON(t *testing.T) {
 
 // --- Benchmark: getEnv performance ---
 func BenchmarkGetEnv(b *testing.B) {
-	os.Setenv("BENCH_VAR", "test_value")
-	defer os.Unsetenv("BENCH_VAR")
+	_ = os.Setenv("BENCH_VAR", "test_value")
+	defer func() { _ = os.Unsetenv("BENCH_VAR") }()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -215,7 +215,7 @@ func BenchmarkExplainText(b *testing.B) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -223,7 +223,7 @@ func BenchmarkExplainText(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		explainText(server.URL, "test-model", testText, "")
+		_, _ = explainText(server.URL, "test-model", testText, "")
 	}
 }
 
@@ -330,7 +330,7 @@ func TestSendMessage(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -365,7 +365,7 @@ func TestSendMessagePreservesHistory(t *testing.T) {
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ChatRequest
-		json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewDecoder(r.Body).Decode(&req)
 
 		callCount++
 
@@ -392,7 +392,7 @@ func TestSendMessagePreservesHistory(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
