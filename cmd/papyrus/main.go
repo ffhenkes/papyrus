@@ -21,6 +21,8 @@ func main() {
 	listSessions := fs.Bool("list", false, "List all saved sessions and exit")
 	listSessions2 := fs.Bool("sessions", false, "List all saved sessions and exit (alias for --list)")
 	deleteSession := fs.String("delete", "", "Delete a saved session by ID")
+	noCache := fs.Bool("no-cache", false, "Disable semantic caching for LLM responses")
+	maxContext := fs.Int("max-context", 8192, "Maximum tokens to keep in conversation history before pruning")
 
 	// Parse flags (allowing positional args to remain)
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -45,7 +47,7 @@ func main() {
 
 	// Handle session resumption via --session flag
 	if *sessionID != "" {
-		handleResumeSession(*sessionID, sessionDir)
+		handleResumeSession(*sessionID, sessionDir, *noCache, *maxContext)
 		return
 	}
 
@@ -105,10 +107,14 @@ func main() {
 
 	// Create LLM client
 	client := llm.NewClient(ollamaURL, modelName, config.MaxTokens)
+	if !*noCache {
+		homeDir, _ := os.UserHomeDir()
+		client.Cache = llm.NewResponseCache(filepath.Join(homeDir, ".papyrus", "cache", conv.SessionID+".cache.json"))
+	}
 	client.DocumentText = text
 
 	// Send initial message with document context
-	explanation, err := client.SendMessageWithDoc([]llm.ChatMessage{}, fullUserMessage, text)
+	explanation, stats, err := client.SendMessageWithDoc([]llm.ChatMessage{}, fullUserMessage, text)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -119,6 +125,7 @@ func main() {
 	conv.AddMessage("assistant", explanation)
 
 	fmt.Println(explanation)
+	fmt.Println(llm.FormatTokenStats(stats))
 
 	// Save session before entering REPL
 	if err := conversation.SaveSession(conv, sessionDir); err != nil {
@@ -128,7 +135,7 @@ func main() {
 	}
 
 	// Enter interactive REPL mode for follow-up questions
-	r := repl.New(client, conv, sessionDir)
+	r := repl.New(client, conv, sessionDir, *maxContext)
 	if err := r.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "REPL error: %v\n", err)
 		os.Exit(1)
@@ -175,7 +182,7 @@ func handleListSessions(sessionDir string) {
 }
 
 // handleResumeSession loads an existing session and enters REPL mode.
-func handleResumeSession(sessionID, sessionDir string) {
+func handleResumeSession(sessionID, sessionDir string, noCache bool, maxContext int) {
 	conv, err := conversation.LoadSession(sessionID, sessionDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -192,6 +199,10 @@ func handleResumeSession(sessionID, sessionDir string) {
 
 	// Recreate LLM client with document context
 	client := llm.NewClient(ollamaURL, modelName, config.MaxTokens)
+	if !noCache {
+		homeDir, _ := os.UserHomeDir()
+		client.Cache = llm.NewResponseCache(filepath.Join(homeDir, ".papyrus", "cache", sessionID+".cache.json"))
+	}
 	client.DocumentText = conv.DocumentText
 
 	// Display last few messages as context
@@ -215,7 +226,7 @@ func handleResumeSession(sessionID, sessionDir string) {
 	fmt.Println("\n" + strings.Repeat("─", 60))
 
 	// Enter REPL with existing conversation
-	r := repl.New(client, conv, sessionDir)
+	r := repl.New(client, conv, sessionDir, maxContext)
 	if err := r.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "REPL error: %v\n", err)
 		os.Exit(1)
@@ -248,6 +259,8 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  --list          List all saved sessions")
 	fmt.Fprintln(os.Stderr, "  --sessions      List all saved sessions (alias)")
 	fmt.Fprintln(os.Stderr, "  --delete ID     Delete a saved session")
+	fmt.Fprintln(os.Stderr, "  --no-cache      Disable semantic caching for LLM responses")
+	fmt.Fprintln(os.Stderr, "  --max-context N Max tokens in conversation history before pruning (default: 8192)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Environment variables:")
 	fmt.Fprintln(os.Stderr, "  OLLAMA_URL    Ollama base URL (default: http://host.docker.internal:11434)")

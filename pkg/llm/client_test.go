@@ -52,7 +52,7 @@ func TestSendMessage(t *testing.T) {
 
 	client := NewClient(server.URL, "test-model", 4096)
 
-	response, err := client.SendMessage([]ChatMessage{}, "Test question")
+	response, _, err := client.SendMessage([]ChatMessage{}, "Test question")
 
 	if err != nil {
 		t.Fatalf("SendMessage() returned error: %v", err)
@@ -102,7 +102,7 @@ func TestSendMessageWithHistory(t *testing.T) {
 	client := NewClient(server.URL, "test-model", 4096)
 
 	// First message
-	response1, err := client.SendMessage([]ChatMessage{}, "First question")
+	response1, _, err := client.SendMessage([]ChatMessage{}, "First question")
 	if err != nil {
 		t.Fatalf("First SendMessage() failed: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestSendMessageWithHistory(t *testing.T) {
 		{Role: "user", Content: "First question"},
 		{Role: "assistant", Content: "First response"},
 	}
-	response2, err := client.SendMessage(history, "Follow-up question")
+	response2, _, err := client.SendMessage(history, "Follow-up question")
 	if err != nil {
 		t.Fatalf("Second SendMessage() failed: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestSendMessageAPIError(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL, "nonexistent-model", 4096)
-	_, err := client.SendMessage([]ChatMessage{}, "test")
+	_, _, err := client.SendMessage([]ChatMessage{}, "test")
 	if err == nil {
 		t.Error("SendMessage() should return error when API returns error")
 	}
@@ -147,7 +147,7 @@ func TestSendMessageAPIError(t *testing.T) {
 // TestSendMessageConnectionError handles connection errors
 func TestSendMessageConnectionError(t *testing.T) {
 	client := NewClient("http://127.0.0.1:1/invalid", "test-model", 4096)
-	_, err := client.SendMessage([]ChatMessage{}, "test")
+	_, _, err := client.SendMessage([]ChatMessage{}, "test")
 	if err == nil {
 		t.Error("SendMessage() should return error when connection fails")
 	}
@@ -161,7 +161,7 @@ func TestSendMessageInvalidJSON(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL, "test-model", 4096)
-	_, err := client.SendMessage([]ChatMessage{}, "test")
+	_, _, err := client.SendMessage([]ChatMessage{}, "test")
 	if err == nil {
 		t.Error("SendMessage() should return error for invalid JSON response")
 	}
@@ -185,7 +185,7 @@ func BenchmarkSendMessage(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, _ = client.SendMessage([]ChatMessage{}, "test")
+		_, _, _ = client.SendMessage([]ChatMessage{}, "test")
 	}
 }
 
@@ -221,7 +221,7 @@ func TestSendMessageWithDoc(t *testing.T) {
 	client := NewClient(server.URL, "test-model", 4096)
 	client.DocumentText = "This is a test document with sample content."
 
-	response, err := client.SendMessageWithDoc([]ChatMessage{}, "Analyze this document", "This is a test document with sample content.")
+	response, _, err := client.SendMessageWithDoc([]ChatMessage{}, "Analyze this document", "This is a test document with sample content.")
 
 	if err != nil {
 		t.Fatalf("SendMessageWithDoc() returned error: %v", err)
@@ -269,7 +269,7 @@ func TestSendMessageWithDocHistory(t *testing.T) {
 	client.DocumentText = documentText
 
 	// First message with document
-	_, err := client.SendMessageWithDoc([]ChatMessage{}, "First question", documentText)
+	_, _, err := client.SendMessageWithDoc([]ChatMessage{}, "First question", documentText)
 	if err != nil {
 		t.Fatalf("First SendMessageWithDoc() failed: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestSendMessageWithDocHistory(t *testing.T) {
 		{Role: "user", Content: "First question"},
 		{Role: "assistant", Content: "Response"},
 	}
-	_, err = client.SendMessageWithDoc(history, "Follow-up question", documentText)
+	_, _, err = client.SendMessageWithDoc(history, "Follow-up question", documentText)
 	if err != nil {
 		t.Fatalf("Second SendMessageWithDoc() failed: %v", err)
 	}
