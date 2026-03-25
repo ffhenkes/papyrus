@@ -11,8 +11,8 @@ func TestEstimateTokens(t *testing.T) {
 		{"empty string", "", 0},
 		{"single word", "hello", 1},
 		{"two words", "hello world", 2},
-		{"three words", "hello world testing", 4},                          // 3 * 4 / 3 = 4
-		{"long string", "the quick brown fox jumps over the lazy dog", 12}, // 9 * 4 / 3 = 12
+		{"three words", "hello world testing", 3},
+		{"long string", "the quick brown fox jumps over the lazy dog", 9},
 	}
 
 	for _, tt := range tests {

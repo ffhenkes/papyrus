@@ -52,7 +52,7 @@ func TestSendMessage(t *testing.T) {
 
 	client := NewClient(server.URL, "test-model", 4096)
 
-	response, _, err := client.SendMessage([]ChatMessage{}, "Test question")
+	response, _, err := client.SendMessage([]ChatMessage{}, "Test question", nil)
 
 	if err != nil {
 		t.Fatalf("SendMessage() returned error: %v", err)
@@ -102,7 +102,7 @@ func TestSendMessageWithHistory(t *testing.T) {
 	client := NewClient(server.URL, "test-model", 4096)
 
 	// First message
-	response1, _, err := client.SendMessage([]ChatMessage{}, "First question")
+	response1, _, err := client.SendMessage([]ChatMessage{}, "First question", nil)
 	if err != nil {
 		t.Fatalf("First SendMessage() failed: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestSendMessageWithHistory(t *testing.T) {
 		{Role: "user", Content: "First question"},
 		{Role: "assistant", Content: "First response"},
 	}
-	response2, _, err := client.SendMessage(history, "Follow-up question")
+	response2, _, err := client.SendMessage(history, "Follow-up question", nil)
 	if err != nil {
 		t.Fatalf("Second SendMessage() failed: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestSendMessageAPIError(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL, "nonexistent-model", 4096)
-	_, _, err := client.SendMessage([]ChatMessage{}, "test")
+	_, _, err := client.SendMessage([]ChatMessage{}, "test", nil)
 	if err == nil {
 		t.Error("SendMessage() should return error when API returns error")
 	}
@@ -147,7 +147,7 @@ func TestSendMessageAPIError(t *testing.T) {
 // TestSendMessageConnectionError handles connection errors
 func TestSendMessageConnectionError(t *testing.T) {
 	client := NewClient("http://127.0.0.1:1/invalid", "test-model", 4096)
-	_, _, err := client.SendMessage([]ChatMessage{}, "test")
+	_, _, err := client.SendMessage([]ChatMessage{}, "test", nil)
 	if err == nil {
 		t.Error("SendMessage() should return error when connection fails")
 	}
@@ -161,7 +161,7 @@ func TestSendMessageInvalidJSON(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL, "test-model", 4096)
-	_, _, err := client.SendMessage([]ChatMessage{}, "test")
+	_, _, err := client.SendMessage([]ChatMessage{}, "test", nil)
 	if err == nil {
 		t.Error("SendMessage() should return error for invalid JSON response")
 	}
@@ -185,7 +185,7 @@ func BenchmarkSendMessage(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, _, _ = client.SendMessage([]ChatMessage{}, "test")
+		_, _, _ = client.SendMessage([]ChatMessage{}, "test", nil)
 	}
 }
 
@@ -221,7 +221,7 @@ func TestSendMessageWithDoc(t *testing.T) {
 	client := NewClient(server.URL, "test-model", 4096)
 	client.DocumentText = "This is a test document with sample content."
 
-	response, _, err := client.SendMessageWithDoc([]ChatMessage{}, "Analyze this document", "This is a test document with sample content.")
+	response, _, err := client.SendMessageWithDoc([]ChatMessage{}, "Analyze this document", "This is a test document with sample content.", nil)
 
 	if err != nil {
 		t.Fatalf("SendMessageWithDoc() returned error: %v", err)
@@ -269,7 +269,7 @@ func TestSendMessageWithDocHistory(t *testing.T) {
 	client.DocumentText = documentText
 
 	// First message with document
-	_, _, err := client.SendMessageWithDoc([]ChatMessage{}, "First question", documentText)
+	_, _, err := client.SendMessageWithDoc([]ChatMessage{}, "First question", documentText, nil)
 	if err != nil {
 		t.Fatalf("First SendMessageWithDoc() failed: %v", err)
 	}
@@ -279,13 +279,12 @@ func TestSendMessageWithDocHistory(t *testing.T) {
 		{Role: "user", Content: "First question"},
 		{Role: "assistant", Content: "Response"},
 	}
-	_, _, err = client.SendMessageWithDoc(history, "Follow-up question", documentText)
+	_, _, err = client.SendMessageWithDoc(history, "Follow-up question", documentText, nil)
 	if err != nil {
 		t.Fatalf("Second SendMessageWithDoc() failed: %v", err)
 	}
 
 	// The second request should be smaller than 2x the first
-	// because document isn't in the user message history
 	if secondRequestSize >= firstRequestSize*2 {
 		t.Errorf("Second request size (%d) should be significantly smaller than 2x first request size (%d), suggests document duplication",
 			secondRequestSize, firstRequestSize*2)

@@ -152,6 +152,11 @@ papyrus --session <session-id>
 
 # Delete a saved session
 papyrus --delete <session-id>
+
+# Advanced Flags
+papyrus --export                     # Export to MD and exit
+papyrus --no-cache                   # Disable semantic cache
+papyrus --max-context 4096           # Restrict token history
 ```
 
 **Example workflow:**
@@ -172,6 +177,8 @@ While in interactive mode, the following commands are available:
 | Command | Description |
 |---------|-------------|
 | `history` | Show all messages in the current session |
+| `stats` | Show precise token usage statistics |
+| `export` | Export the current session to a Markdown file |
 | `save` | Explicitly save the session to disk |
 | `session info` | Show session metadata (ID, file, timestamps, message count) |
 | `quit` / `exit` | Save and exit |
@@ -259,6 +266,9 @@ The system prompt used is:
 | `papyrus --list` | List all saved sessions |
 | `papyrus --session <id>` | Resume a saved session |
 | `papyrus --delete <id>` | Delete a saved session |
+| `papyrus --export` | Analyze, format as Markdown, and exit |
+| `papyrus --no-cache` | Disable local semantic caching |
+| `papyrus --max-context N` | Configure conversation history limit |
 
 ## Troubleshooting
 
