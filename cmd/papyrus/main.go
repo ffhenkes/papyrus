@@ -23,6 +23,7 @@ func main() {
 	deleteSession := fs.String("delete", "", "Delete a saved session by ID")
 	noCache := fs.Bool("no-cache", false, "Disable semantic caching for LLM responses")
 	maxContext := fs.Int("max-context", 8192, "Maximum tokens to keep in conversation history before pruning")
+	exportFlag := fs.Bool("export", false, "Analyze document, export conversation to Markdown, and exit instantly")
 
 	// Parse flags (allowing positional args to remain)
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -114,7 +115,10 @@ func main() {
 	client.DocumentText = text
 
 	// Send initial message with document context
-	explanation, stats, err := client.SendMessageWithDoc([]llm.ChatMessage{}, fullUserMessage, text)
+	fmt.Println("\n=== Explanation ===")
+	explanation, stats, err := client.SendMessageWithDoc([]llm.ChatMessage{}, fullUserMessage, text, func(token string) {
+		fmt.Print(token)
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -124,7 +128,7 @@ func main() {
 	conv.AddMessage("user", userPrompt)
 	conv.AddMessage("assistant", explanation)
 
-	fmt.Println(explanation)
+	fmt.Println() // ensure newline after stream finishes
 	fmt.Println(llm.FormatTokenStats(stats))
 
 	// Save session before entering REPL
@@ -132,6 +136,17 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Warning: could not save session: %v\n", err)
 	} else {
 		fmt.Printf("\n[Session] Saved as '%s'. Use --session %s to resume.\n", conv.SessionID, conv.SessionID)
+	}
+
+	if *exportFlag {
+		md := conversation.ExportMarkdown(conv)
+		exportFile := fmt.Sprintf("%s_export.md", conv.SessionID)
+		if err := os.WriteFile(exportFile, []byte(md), 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to write export file: %v\n", err)
+		} else {
+			fmt.Printf("\n[Export] Saved conversation to %s\n", exportFile)
+		}
+		return // Exit without entering REPL
 	}
 
 	// Enter interactive REPL mode for follow-up questions
@@ -261,6 +276,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  --delete ID     Delete a saved session")
 	fmt.Fprintln(os.Stderr, "  --no-cache      Disable semantic caching for LLM responses")
 	fmt.Fprintln(os.Stderr, "  --max-context N Max tokens in conversation history before pruning (default: 8192)")
+	fmt.Fprintln(os.Stderr, "  --export        Export session to Markdown and exit immediately")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Environment variables:")
 	fmt.Fprintln(os.Stderr, "  OLLAMA_URL    Ollama base URL (default: http://host.docker.internal:11434)")

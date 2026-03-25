@@ -34,6 +34,7 @@ type ChatOptions struct {
 type ChatResponse struct {
 	Message ChatMessage `json:"message"`
 	Error   string      `json:"error,omitempty"`
+	Done    bool        `json:"done"`
 }
 
 // Client represents an Ollama API client.
@@ -55,12 +56,15 @@ func NewClient(url, modelName string, maxTokens int) *Client {
 }
 
 // SendMessage sends a message to Ollama with conversation history.
-func (c *Client) SendMessage(messages []ChatMessage, userMessage string) (string, TokenStats, error) {
+func (c *Client) SendMessage(messages []ChatMessage, userMessage string, onToken func(string)) (string, TokenStats, error) {
 	// Check cache
 	if c.Cache != nil {
 		cacheKey := NormalizeKey(userMessage)
 		if cachedResponse, found := c.Cache.Get(cacheKey); found {
 			fmt.Fprintf(os.Stderr, "\r[OK] Retrieved from cache (instant)              \n")
+			if onToken != nil {
+				onToken(cachedResponse)
+			}
 			stats := TokenStats{
 				InputTokens:  EstimateTokens(userMessage),
 				OutputTokens: EstimateTokens(cachedResponse),
@@ -74,7 +78,7 @@ func (c *Client) SendMessage(messages []ChatMessage, userMessage string) (string
 	// Build request with full conversation history
 	req := ChatRequest{
 		Model:  c.ModelName,
-		Stream: false,
+		Stream: onToken != nil,
 		Options: ChatOptions{
 			NumPredict: c.MaxTokens,
 		},
@@ -102,62 +106,24 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 		Content: userMessage,
 	})
 
-	body, err := json.Marshal(req)
+	fullResponse, duration, err := c.doRequestStream(req, onToken)
 	if err != nil {
-		return "", TokenStats{}, fmt.Errorf("failed to marshal request: %w", err)
+		return "", TokenStats{}, err
 	}
 
-	endpoint := strings.TrimRight(c.URL, "/") + "/api/chat"
-	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
-	if err != nil {
-		return "", TokenStats{}, fmt.Errorf("failed to create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	// Show progress spinner while waiting for LLM response
-	done := make(chan bool)
-	startTime := time.Now()
-	go spinner(done, c.ModelName, startTime)
-
-	client := &http.Client{}
-	resp, err := client.Do(httpReq)
-	close(done)
-	time.Sleep(100 * time.Millisecond) // Allow spinner to finish printing
-
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "\r") // Clear spinner line
-		return "", TokenStats{}, fmt.Errorf("could not reach Ollama at %s — is it running? (%w)", c.URL, err)
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
-		}
-	}()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", TokenStats{}, fmt.Errorf("failed to read response: %w", err)
+	// Save to cache
+	if c.Cache != nil {
+		cacheKey := NormalizeKey(userMessage)
+		c.Cache.Set(cacheKey, fullResponse)
+		_ = c.Cache.Save()
 	}
 
-	var chatResp ChatResponse
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return "", TokenStats{}, fmt.Errorf("failed to parse response: %w\nraw: %s", err, string(respBody))
-	}
-
-	if chatResp.Error != "" {
-		if strings.Contains(chatResp.Error, "model") && strings.Contains(chatResp.Error, "not found") {
-			return "", TokenStats{}, fmt.Errorf("ollama model '%s' not found. Please run 'ollama pull %s' inside the Ollama container or on your host (error: %s)", c.ModelName, c.ModelName, chatResp.Error)
-		}
-		return "", TokenStats{}, fmt.Errorf("ollama error: %s", chatResp.Error)
-	}
-
-	duration := time.Since(startTime).Seconds()
 	historyText := ""
 	for _, m := range messages {
 		historyText += m.Content + " "
 	}
 	inputTokens := EstimateTokens(historyText + userMessage)
-	outputTokens := EstimateTokens(chatResp.Message.Content)
+	outputTokens := EstimateTokens(fullResponse)
 
 	stats := TokenStats{
 		InputTokens:  inputTokens,
@@ -166,17 +132,20 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 		TokensPerSec: float64(outputTokens) / duration,
 	}
 
-	return chatResp.Message.Content, stats, nil
+	return fullResponse, stats, nil
 }
 
 // SendMessageWithDoc sends a message with document context without embedding document in history.
 // This prevents re-sending the entire document with every follow-up question.
-func (c *Client) SendMessageWithDoc(messages []ChatMessage, userMessage, documentContext string) (string, TokenStats, error) {
+func (c *Client) SendMessageWithDoc(messages []ChatMessage, userMessage, documentContext string, onToken func(string)) (string, TokenStats, error) {
 	// Check cache
 	if c.Cache != nil {
 		cacheKey := NormalizeKey(userMessage)
 		if cachedResponse, found := c.Cache.Get(cacheKey); found {
 			fmt.Fprintf(os.Stderr, "\r[OK] Retrieved from cache (instant)              \n")
+			if onToken != nil {
+				onToken(cachedResponse)
+			}
 			stats := TokenStats{
 				InputTokens:  EstimateTokens(documentContext + " " + userMessage),
 				OutputTokens: EstimateTokens(cachedResponse),
@@ -204,7 +173,7 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 
 	req := ChatRequest{
 		Model:  c.ModelName,
-		Stream: false,
+		Stream: onToken != nil,
 		Options: ChatOptions{
 			NumPredict: c.MaxTokens,
 		},
@@ -225,62 +194,24 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 		Content: userMessage,
 	})
 
-	body, err := json.Marshal(req)
+	fullResponse, duration, err := c.doRequestStream(req, onToken)
 	if err != nil {
-		return "", TokenStats{}, fmt.Errorf("failed to marshal request: %w", err)
+		return "", TokenStats{}, err
 	}
 
-	endpoint := strings.TrimRight(c.URL, "/") + "/api/chat"
-	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
-	if err != nil {
-		return "", TokenStats{}, fmt.Errorf("failed to create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	// Show progress spinner while waiting for LLM response
-	done := make(chan bool)
-	startTime := time.Now()
-	go spinner(done, c.ModelName, startTime)
-
-	client := &http.Client{}
-	resp, err := client.Do(httpReq)
-	close(done)
-	time.Sleep(100 * time.Millisecond) // Allow spinner to finish printing
-
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "\r") // Clear spinner line
-		return "", TokenStats{}, fmt.Errorf("could not reach Ollama at %s — is it running? (%w)", c.URL, err)
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
-		}
-	}()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", TokenStats{}, fmt.Errorf("failed to read response: %w", err)
+	// Save to cache
+	if c.Cache != nil {
+		cacheKey := NormalizeKey(userMessage)
+		c.Cache.Set(cacheKey, fullResponse)
+		_ = c.Cache.Save()
 	}
 
-	var chatResp ChatResponse
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return "", TokenStats{}, fmt.Errorf("failed to parse response: %w\nraw: %s", err, string(respBody))
-	}
-
-	if chatResp.Error != "" {
-		if strings.Contains(chatResp.Error, "model") && strings.Contains(chatResp.Error, "not found") {
-			return "", TokenStats{}, fmt.Errorf("ollama model '%s' not found. Please run 'ollama pull %s' inside the Ollama container or on your host (error: %s)", c.ModelName, c.ModelName, chatResp.Error)
-		}
-		return "", TokenStats{}, fmt.Errorf("ollama error: %s", chatResp.Error)
-	}
-
-	duration := time.Since(startTime).Seconds()
 	historyText := ""
 	for _, m := range messages {
 		historyText += m.Content + " "
 	}
 	inputTokens := EstimateTokens(documentContext + " " + historyText + userMessage)
-	outputTokens := EstimateTokens(chatResp.Message.Content)
+	outputTokens := EstimateTokens(fullResponse)
 
 	stats := TokenStats{
 		InputTokens:  inputTokens,
@@ -289,7 +220,107 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 		TokensPerSec: float64(outputTokens) / duration,
 	}
 
-	return chatResp.Message.Content, stats, nil
+	return fullResponse, stats, nil
+}
+
+func (c *Client) doRequestStream(req ChatRequest, onToken func(string)) (string, float64, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	endpoint := strings.TrimRight(c.URL, "/") + "/api/chat"
+	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	spinnerDone := make(chan bool)
+	startTime := time.Now()
+	go spinner(spinnerDone, c.ModelName, startTime)
+
+	client := &http.Client{}
+	resp, err := client.Do(httpReq)
+
+	if err != nil {
+		close(spinnerDone)
+		fmt.Fprintf(os.Stderr, "\r") // Clear spinner line
+		return "", 0, fmt.Errorf("could not reach Ollama at %s — is it running? (%w)", c.URL, err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "\nError closing response body: %v\n", err)
+		}
+	}()
+
+	var fullResponse strings.Builder
+	firstToken := false
+
+	if req.Stream {
+		decoder := json.NewDecoder(resp.Body)
+		for {
+			var chatResp ChatResponse
+			err := decoder.Decode(&chatResp)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				if !firstToken {
+					close(spinnerDone)
+				}
+				return "", 0, fmt.Errorf("failed to decode stream: %w", err)
+			}
+			if chatResp.Error != "" {
+				if !firstToken {
+					close(spinnerDone)
+				}
+				return "", 0, fmt.Errorf("ollama error: %s", chatResp.Error)
+			}
+
+			if !firstToken {
+				close(spinnerDone)
+				time.Sleep(50 * time.Millisecond)  // Let spinner erase itself
+				fmt.Fprintf(os.Stderr, "\r\033[K") // Clear line
+				firstToken = true
+			}
+
+			if chatResp.Message.Content != "" {
+				if onToken != nil {
+					onToken(chatResp.Message.Content)
+				}
+				fullResponse.WriteString(chatResp.Message.Content)
+			}
+
+			if chatResp.Done {
+				break
+			}
+		}
+	} else {
+		respBody, err := io.ReadAll(resp.Body)
+		close(spinnerDone)
+		time.Sleep(100 * time.Millisecond) // Allow spinner to finish printing
+
+		if err != nil {
+			return "", 0, fmt.Errorf("failed to read response: %w", err)
+		}
+
+		var chatResp ChatResponse
+		if err := json.Unmarshal(respBody, &chatResp); err != nil {
+			return "", 0, fmt.Errorf("failed to parse response: %w\nraw: %s", err, string(respBody))
+		}
+
+		if chatResp.Error != "" {
+			if strings.Contains(chatResp.Error, "model") && strings.Contains(chatResp.Error, "not found") {
+				return "", 0, fmt.Errorf("ollama model '%s' not found. Please run 'ollama pull %s' (error: %s)", c.ModelName, c.ModelName, chatResp.Error)
+			}
+			return "", 0, fmt.Errorf("ollama error: %s", chatResp.Error)
+		}
+		fullResponse.WriteString(chatResp.Message.Content)
+	}
+
+	duration := time.Since(startTime).Seconds()
+	return fullResponse.String(), duration, nil
 }
 
 // formatDuration returns a human-readable string of the elapsed time.

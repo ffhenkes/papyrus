@@ -3,7 +3,19 @@ package llm
 import (
 	"fmt"
 	"strings"
+
+	"github.com/pkoukk/tiktoken-go"
 )
+
+var encoding *tiktoken.Tiktoken
+
+func init() {
+	// Initialize the cl100k_base BPE encoder (A highly accurate proxy for Llama3/Mistral token ratios)
+	enc, err := tiktoken.GetEncoding("cl100k_base")
+	if err == nil {
+		encoding = enc
+	}
+}
 
 // TokenStats tracks the token usage for a single request or cumulatively.
 type TokenStats struct {
@@ -13,15 +25,20 @@ type TokenStats struct {
 	TokensPerSec float64 // Output tokens per second during generation
 }
 
-// EstimateTokens provides a simple, dependency-free heuristic for token counting.
-// It assumes roughly 0.75 words per token (or ~1.33 tokens per word), which is
-// standard for Latin-alphabet text using subword tokenization (like BPE/WordPiece).
+// EstimateTokens provides a highly accurate BPE token count.
+// It gracefully falls back to the 1.33 heuristic if the encoder failed to initialize.
 func EstimateTokens(text string) int {
 	if text == "" {
 		return 0
 	}
+	if encoding != nil {
+		// tiktoken Encode returns []int (the tokens)
+		tokens := encoding.Encode(text, nil, nil)
+		return len(tokens)
+	}
+
+	// Heuristic fallback: roughly 1.33 tokens per word
 	words := len(strings.Fields(text))
-	// Integer math: (words * 4) / 3 gives ~1.33 multiplier
 	return (words * 4) / 3
 }
 
@@ -35,6 +52,5 @@ func (t *TokenStats) Add(other TokenStats) {
 	t.InputTokens += other.InputTokens
 	t.OutputTokens += other.OutputTokens
 	t.TotalTokens += other.TotalTokens
-	// Note: TokensPerSec doesn't make logical sense to sum up,
-	// so it's left out of cumulative tracking.
+	// Note: TokensPerSec is point-in-time calculation, ignored for cumulative stats.
 }

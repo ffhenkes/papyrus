@@ -96,6 +96,16 @@ func (r *REPL) handleCommand(input string) bool {
 		r.printStats()
 		return false
 
+	case "export":
+		md := conversation.ExportMarkdown(r.conv)
+		filename := fmt.Sprintf("%s_export.md", r.conv.SessionID)
+		if err := os.WriteFile(filename, []byte(md), 0600); err != nil {
+			_, _ = fmt.Fprintf(r.writer, "Failed to export: %v\n", err)
+		} else {
+			_, _ = fmt.Fprintf(r.writer, "Successfully exported conversation to %s\n", filename)
+		}
+		return false
+
 	default:
 		// Regular message - send to LLM
 		return r.sendMessage(input)
@@ -118,7 +128,10 @@ func (r *REPL) sendMessage(userMessage string) bool {
 	}
 
 	// Use SendMessageWithDoc to avoid re-sending the document with each follow-up
-	response, stats, err := r.client.SendMessageWithDoc(history, userMessage, r.client.DocumentText)
+	_, _ = fmt.Fprintln(r.writer, "")
+	response, stats, err := r.client.SendMessageWithDoc(history, userMessage, r.client.DocumentText, func(token string) {
+		_, _ = fmt.Fprint(r.writer, token)
+	})
 	if err != nil {
 		_, _ = fmt.Fprintf(r.writer, "Error: %v\n", err)
 		return false
@@ -131,10 +144,8 @@ func (r *REPL) sendMessage(userMessage string) bool {
 	// Accumulate stats
 	r.stats.Add(stats)
 
-	// Display response
-	_, _ = fmt.Fprintln(r.writer, "")
-	_, _ = fmt.Fprintln(r.writer, response)
-	_, _ = fmt.Fprintln(r.writer, "\n"+llm.FormatTokenStats(stats))
+	// Display token stats (newline provided by writer)
+	_, _ = fmt.Fprintln(r.writer, "\n\n"+llm.FormatTokenStats(stats))
 
 	return false
 }
