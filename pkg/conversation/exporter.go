@@ -20,12 +20,12 @@ func ExportMarkdown(conv *Conversation) string {
 	sb.WriteString("---\n\n")
 
 	for _, msg := range conv.Messages {
-		role := "\U0001F464 User" // 👤 User
+		role := "\U0001F464 User" // User
 		switch msg.Role {
 		case "assistant":
-			role = "\U0001F916 Assistant" // 🤖 Assistant
+			role = "\U0001F916 Assistant" // Assistant
 		case "system":
-			role = "\u2699\uFE0F System" // ⚙️ System
+			role = "\u2699\uFE0F System" // System
 		}
 
 		fmt.Fprintf(&sb, "### %s\n\n", role)

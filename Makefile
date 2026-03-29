@@ -21,24 +21,35 @@ help: ## Show available targets
 		"test"  "Run tests" \
 		"build" "Build binary for GOOS/GOARCH (default: linux/amd64)" \
 		"clean" "Remove bin directory" \
-		"up"    "Start Ollama + Papyrus stack (docker-compose up)" \
-		"down"  "Stop and remove containers (docker-compose down)" \
-		"run-pdf" "Analyze a PDF (runs in Docker; requires 'make up' first)" \
-		"run"   "Build and run binary locally (requires local Ollama)" \
-		"docker-build" "Build Docker image"
+		"up"    "Start full infra stack (Ollama + Piper)" \
+		"up-piper" "Start only the Piper TTS service" \
+		"up-ollama" "Start only the Ollama LLM service" \
+		"down"  "Stop and remove all containers" \
+		"run-cli" "Run the Papyrus CLI in a container (requires 'make up')" \
+		"run"   "Run the Papyrus binary locally on host" \
+		"docker-build" "Build the Papyrus Docker image"
 
-up: ## Start Ollama + Papyrus stack
-	@echo "Starting docker-compose stack (Ollama + Papyrus)..."
+up: ## Start Ollama + Piper stack
+	@echo "Starting full stack (Ollama + Piper)..."
 	@docker-compose up -d --build
+
+up-piper: ## Start only the Piper service
+	@echo "Starting Piper container..."
+
+	@docker-compose up -d piper
+
+up-ollama: ## Start only the Ollama service
+	@echo "Starting Ollama container..."
+	@docker-compose up -d ollama
 
 down: ## Stop and remove containers
 	@echo "Stopping docker-compose stack..."
 	@docker-compose down
 
-run-pdf: ## Analyze a PDF with override (use: make run-pdf PDF_FILE=pdfs/myfile.pdf CUSTOM_PROMPT="Your custom prompt")
-	@if [ -z "$(PDF_FILE)" ]; then echo "Error: PDF_FILE not specified. Usage: make run-pdf PDF_FILE=pdfs/myfile.pdf"; exit 1; fi
-	@echo "Analyzing PDF: $(PDF_FILE)"
-	@docker-compose run --rm papyrus /$(PDF_FILE) "$(CUSTOM_PROMPT)"
+run-cli: ## Run CLI in container (use: make run-cli PDF_FILE=pdfs/myfile.pdf ARGS=--tts)
+	@if [ -z "$(PDF_FILE)" ]; then echo "Error: PDF_FILE not specified. Usage: make run-cli PDF_FILE=pdfs/myfile.pdf"; exit 1; fi
+	@echo "Executing Papyrus CLI for: $(PDF_FILE)"
+	@docker-compose run --rm --no-deps papyrus $(ARGS)
 
 deps: ## Download and tidy dependencies
 	@echo "Tidying dependencies..."
@@ -66,10 +77,10 @@ build: ## Build binary for GOOS/GOARCH (default: linux/amd64)
 clean: ## Remove bin directory
 	@rm -rf bin
 
-run: ## Build and run binary locally (requires local Ollama on localhost:11434)
-	@echo "Running locally..."
-	@GOOS=$(shell go env GOOS) GOARCH=$(shell go env GOARCH) $(MAKE) build
-	@OLLAMA_URL=http://localhost:11434 ./bin/$(shell go env GOOS)-$(shell go env GOARCH)/papyrus $(ARGS)
+run: ## Run binary locally on host (requires 'make up' to provide Ollama/Piper)
+	@echo "Running locally against Docker infra..."
+	@$(MAKE) build
+	@OLLAMA_URL=http://localhost:11434 PIPER_URL=http://localhost:5000 ./bin/$(shell go env GOOS)-$(shell go env GOARCH)/papyrus $(ARGS)
 
 docker-build: ## Build Docker image
 	@echo "Building Docker image..."

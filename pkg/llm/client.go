@@ -13,8 +13,9 @@ import (
 
 // ChatMessage represents a single message in the conversation.
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role             string `json:"role"`
+	Content          string `json:"content"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 // ChatRequest is the request payload for the Ollama API.
@@ -32,9 +33,10 @@ type ChatOptions struct {
 
 // ChatResponse is the response payload from the Ollama API.
 type ChatResponse struct {
-	Message ChatMessage `json:"message"`
-	Error   string      `json:"error,omitempty"`
-	Done    bool        `json:"done"`
+	Message   ChatMessage `json:"message"`
+	Reasoning string      `json:"reasoning_content,omitempty"`
+	Error     string      `json:"error,omitempty"`
+	Done      bool        `json:"done"`
 }
 
 // Client represents an Ollama API client.
@@ -259,6 +261,8 @@ func (c *Client) doRequestStream(req ChatRequest, onToken func(string)) (string,
 
 	if req.Stream {
 		decoder := json.NewDecoder(resp.Body)
+		lastType := "content" // current stream state: "content" or "reasoning"
+
 		for {
 			var chatResp ChatResponse
 			err := decoder.Decode(&chatResp)
@@ -285,7 +289,30 @@ func (c *Client) doRequestStream(req ChatRequest, onToken func(string)) (string,
 				firstToken = true
 			}
 
+			// Handle Reasoning Content (native field)
+			if chatResp.Reasoning != "" {
+				if lastType != "reasoning" {
+					if onToken != nil {
+						onToken("<think>\n")
+					}
+					fullResponse.WriteString("<think>\n")
+					lastType = "reasoning"
+				}
+				if onToken != nil {
+					onToken(chatResp.Reasoning)
+				}
+				fullResponse.WriteString(chatResp.Reasoning)
+			}
+
+			// Handle Regular Content
 			if chatResp.Message.Content != "" {
+				if lastType == "reasoning" {
+					if onToken != nil {
+						onToken("\n</think>\n\n")
+					}
+					fullResponse.WriteString("\n</think>\n\n")
+					lastType = "content"
+				}
 				if onToken != nil {
 					onToken(chatResp.Message.Content)
 				}
@@ -293,6 +320,13 @@ func (c *Client) doRequestStream(req ChatRequest, onToken func(string)) (string,
 			}
 
 			if chatResp.Done {
+				// Ensure think block is closed if the response ended in reasoning
+				if lastType == "reasoning" {
+					if onToken != nil {
+						onToken("\n</think>\n")
+					}
+					fullResponse.WriteString("\n</think>\n")
+				}
 				break
 			}
 		}

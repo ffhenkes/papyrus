@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"papyrus/pkg/conversation"
 	"papyrus/pkg/llm"
+	"papyrus/pkg/tts"
 )
 
 // REPL represents a read-eval-print loop for interactive conversations.
@@ -21,6 +23,7 @@ type REPL struct {
 	sessionDir string
 	stats      llm.TokenStats
 	maxContext int
+	ttsClient  *tts.Client
 }
 
 // New creates a new REPL session.
@@ -34,6 +37,11 @@ func New(client *llm.Client, conv *conversation.Conversation, sessionDir string,
 		sessionDir: sessionDir,
 		maxContext: maxContext,
 	}
+}
+
+// WithTTS enables text-to-speech for the REPL.
+func (r *REPL) WithTTS(client *tts.Client) {
+	r.ttsClient = client
 }
 
 // Start begins the interactive REPL loop.
@@ -146,6 +154,17 @@ func (r *REPL) sendMessage(userMessage string) bool {
 
 	// Display token stats (newline provided by writer)
 	_, _ = fmt.Fprintln(r.writer, "\n\n"+llm.FormatTokenStats(stats))
+
+	// Generate speech if TTS is enabled
+	if r.ttsClient != nil {
+		voiceFile := filepath.Join("voice", fmt.Sprintf("%s_%d.wav", r.conv.SessionID, len(r.conv.Messages)/2))
+		_, _ = fmt.Fprintf(r.writer, "[TTS] Generating speech: %s... ", voiceFile)
+		if err := r.ttsClient.Synthesize(response, voiceFile); err != nil {
+			_, _ = fmt.Fprintf(r.writer, "Error: %v\n", err)
+		} else {
+			_, _ = fmt.Fprintln(r.writer, "Done.")
+		}
+	}
 
 	return false
 }

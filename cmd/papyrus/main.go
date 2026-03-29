@@ -12,6 +12,7 @@ import (
 	"papyrus/pkg/llm"
 	"papyrus/pkg/pdf"
 	"papyrus/pkg/repl"
+	"papyrus/pkg/tts"
 )
 
 func main() {
@@ -24,6 +25,7 @@ func main() {
 	noCache := fs.Bool("no-cache", false, "Disable semantic caching for LLM responses")
 	maxContext := fs.Int("max-context", 8192, "Maximum tokens to keep in conversation history before pruning")
 	exportFlag := fs.Bool("export", false, "Analyze document, export conversation to Markdown, and exit instantly")
+	ttsFlag := fs.Bool("tts", false, "Enable text-to-speech for model responses")
 
 	// Parse flags (allowing positional args to remain)
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -46,9 +48,17 @@ func main() {
 		return
 	}
 
+	// Initialize TTS if enabled
+	var ttsClient *tts.Client
+	if *ttsFlag {
+		piperURL := getEnv("PIPER_URL", "http://localhost:5000")
+		ttsClient = tts.NewClient(piperURL)
+		fmt.Printf("[TTS] Using Piper at %s\n", piperURL)
+	}
+
 	// Handle session resumption via --session flag
 	if *sessionID != "" {
-		handleResumeSession(*sessionID, sessionDir, *noCache, *maxContext)
+		handleResumeSession(*sessionID, sessionDir, *noCache, *maxContext, ttsClient)
 		return
 	}
 
@@ -128,6 +138,17 @@ func main() {
 	conv.AddMessage("user", userPrompt)
 	conv.AddMessage("assistant", explanation)
 
+	// Generate speech if enabled
+	if ttsClient != nil {
+		voiceFile := filepath.Join("voice", fmt.Sprintf("%s_initial.wav", conv.SessionID))
+		fmt.Printf("\n[TTS] Generating speech: %s... ", voiceFile)
+		if err := ttsClient.Synthesize(explanation, voiceFile); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		} else {
+			fmt.Println("Done.")
+		}
+	}
+
 	fmt.Println() // ensure newline after stream finishes
 	fmt.Println(llm.FormatTokenStats(stats))
 
@@ -151,6 +172,9 @@ func main() {
 
 	// Enter interactive REPL mode for follow-up questions
 	r := repl.New(client, conv, sessionDir, *maxContext)
+	if ttsClient != nil {
+		r.WithTTS(ttsClient)
+	}
 	if err := r.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "REPL error: %v\n", err)
 		os.Exit(1)
@@ -197,7 +221,7 @@ func handleListSessions(sessionDir string) {
 }
 
 // handleResumeSession loads an existing session and enters REPL mode.
-func handleResumeSession(sessionID, sessionDir string, noCache bool, maxContext int) {
+func handleResumeSession(sessionID, sessionDir string, noCache bool, maxContext int, ttsClient *tts.Client) {
 	conv, err := conversation.LoadSession(sessionID, sessionDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -211,6 +235,10 @@ func handleResumeSession(sessionID, sessionDir string, noCache bool, maxContext 
 	fmt.Printf("-> %d messages in conversation\n", len(conv.Messages))
 	fmt.Printf("# Papyrus → %s (%s)\n", ollamaURL, modelName)
 	fmt.Println(strings.Repeat("─", 60))
+
+	// Normal flow will use ttsFlag from global flags
+	// But in resume mode, we need to check if --tts was passed
+	// (Actually fs.Parse was called at the start of main)
 
 	// Recreate LLM client with document context
 	client := llm.NewClient(ollamaURL, modelName, config.MaxTokens)
@@ -242,6 +270,9 @@ func handleResumeSession(sessionID, sessionDir string, noCache bool, maxContext 
 
 	// Enter REPL with existing conversation
 	r := repl.New(client, conv, sessionDir, maxContext)
+	if ttsClient != nil {
+		r.WithTTS(ttsClient)
+	}
 	if err := r.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "REPL error: %v\n", err)
 		os.Exit(1)
@@ -277,10 +308,12 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  --no-cache      Disable semantic caching for LLM responses")
 	fmt.Fprintln(os.Stderr, "  --max-context N Max tokens in conversation history before pruning (default: 8192)")
 	fmt.Fprintln(os.Stderr, "  --export        Export session to Markdown and exit immediately")
+	fmt.Fprintln(os.Stderr, "  --tts           Enable text-to-speech for model responses")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Environment variables:")
 	fmt.Fprintln(os.Stderr, "  OLLAMA_URL    Ollama base URL (default: http://host.docker.internal:11434)")
 	fmt.Fprintln(os.Stderr, "  OLLAMA_MODEL  Model to use    (default: qwen3:8b)")
+	fmt.Fprintln(os.Stderr, "  PIPER_URL     Piper HTTP URL  (default: http://localhost:5000)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Examples:")
 	fmt.Fprintln(os.Stderr, "  papyrus document.pdf")

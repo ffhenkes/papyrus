@@ -1,5 +1,6 @@
 bin/
 pdfs/
+voice/
 ollama_data/
 .github/
 .env

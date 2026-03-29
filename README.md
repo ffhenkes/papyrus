@@ -10,6 +10,7 @@
 - [Usage](#usage)
 - [Session Persistence](#session-persistence)
 - [Configuration](#configuration)
+- [Text-to-Speech (TTS)](#text-to-speech-tts)
 - [Available Commands](#available-commands)
 - [Troubleshooting](#troubleshooting)
 
@@ -28,8 +29,8 @@ export OLLAMA_MODEL=qwen3:8b
 export PDF_FILE=pdfs/test.pdf
 export CUSTOM_PROMPT="Summarize this document"
 
-# 3. Analyze a PDF
-make run-pdf PDF_FILE=pdfs/test.pdf CUSTOM_PROMPT="Summarize key findings"
+# 3. Analyze a PDF using the containerized CLI (requires the stack from step 2)
+make run-cli PDF_FILE=pdfs/test.pdf ARGS="--tts"
 ```
 
 This automatically pulls the latest models and runs the analysis. To start the full stack and keep it running:
@@ -38,8 +39,8 @@ This automatically pulls the latest models and runs the analysis. To start the f
 # Start Ollama + Papyrus stack in background
 make up
 
-# In another terminal, analyze PDFs
-make run-pdf PDF_FILE=pdfs/myfile.pdf
+# In another terminal, analyze PDFs using the containerized CLI
+make run-cli PDF_FILE=pdfs/myfile.pdf
 
 # Stop when done
 make down
@@ -101,13 +102,13 @@ make run ARGS="pdfs/test.pdf 'Summarize this'"
 ### Two Usage Modes
 
 **Mode 1: Docker (Recommended)** — Everything isolated in containers
-- Use: `make run-pdf PDF_FILE=pdfs/test.pdf`
+- Use: `make run-cli PDF_FILE=pdfs/test.pdf`
 - Ollama runs inside Docker: `http://ollama:11434`
 - Models stored in `./ollama_data/` (persistent)
 - No local dependencies needed
 
 **Mode 2: Local Binary** — Run natively on your machine
-- Use: `make run ARGS="pdfs/test.pdf 'Custom prompt'"`
+- Use: `make run ARGS="pdfs/test.pdf --tts"`
 - Requires: Ollama running locally on `http://localhost:11434`
 - Useful for: development, integration with local tools
 - Note: Must start Ollama separately (not included)
@@ -115,14 +116,14 @@ make run ARGS="pdfs/test.pdf 'Summarize this'"
 ### Docker-based Analysis (Recommended)
 
 ```bash
-# One-shot analysis (pulls models on first run)
-make run-pdf PDF_FILE=pdfs/myfile.pdf CUSTOM_PROMPT="List the main topics"
+# One-shot analysis (starts everything, runs, then exits)
+make run-cli PDF_FILE=pdfs/myfile.pdf CUSTOM_PROMPT="List the main topics"
 
-# Or use persistent stack
-make up                              # Start stack in background
-make run-pdf PDF_FILE=pdfs/file1.pdf # Analyze file 1
-make run-pdf PDF_FILE=pdfs/file2.pdf # Analyze file 2
-make down                            # Stop when done
+# Or use persistent stack (Ollama + Piper)
+make up                              # Start background services
+make run-cli PDF_FILE=pdfs/file1.pdf ARGS="--tts" # Run CLI with speech
+make run-cli PDF_FILE=pdfs/file2.pdf # Run CLI without speech
+make down                            # Clean up
 ```
 
 ### Local Binary Analysis
@@ -157,6 +158,7 @@ papyrus --delete <session-id>
 papyrus --export                     # Export to MD and exit
 papyrus --no-cache                   # Disable semantic cache
 papyrus --max-context 4096           # Restrict token history
+papyrus --tts                       # Enable text-to-speech
 ```
 
 **Example workflow:**
@@ -181,9 +183,44 @@ While in interactive mode, the following commands are available:
 | `export` | Export the current session to a Markdown file |
 | `save` | Explicitly save the session to disk |
 | `session info` | Show session metadata (ID, file, timestamps, message count) |
-| `quit` / `exit` | Save and exit |
+| `exit` / `quit` | Save and exit |
 
-Sessions are also **auto-saved on exit** (including Ctrl+D / EOF).
+## Text-to-Speech (TTS)
+
+Papyrus can generate speech (audio) for model responses using [Piper](https://github.com/rhasspy/piper).
+
+### How it works
+
+1.  **Docker stack:** The Piper service runs as a separate container (`artibex/piper-http`).
+2.  **Activation:** Use the `--tts` flag when running Papyrus.
+3.  **Output:** Audio files are saved as `.wav` files in the `voice/` directory.
+    - Initial explanation: `voice/<session-id>_initial.wav`
+    - REPL responses: `voice/<session-id>_<message-index>.wav`
+
+### Configuration for TTS
+
+| Variable | Default | Description |
+|----------|---|-------------|
+| `PIPER_URL` | `http://localhost:5000` | Piper HTTP endpoint |
+
+**Example:**
+```bash
+# Analyze with speech generation using Docker
+make run-cli PDF_FILE=pdfs/report.pdf ARGS="--tts"
+
+# Analyze with speech generation using local binary
+make run ARGS="pdfs/report.pdf --tts"
+```
+
+### Changing the TTS Voice
+You can change the language or voice used by Piper by setting the `PIPER_VOICE_URL` in your `.env` file. You can find more voices on the [Piper HuggingFace repository](https://huggingface.co/rhasspy/piper-voices).
+
+**Portuguese (Brazil) Example:**
+```bash
+PIPER_VOICE_URL=https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx?download=true
+```
+
+Simply update the variable and run `make up` to restart the Piper service with the new model.
 
 ## Configuration
 
@@ -201,6 +238,7 @@ cp .env.example .env
 | `OLLAMA_MODEL` | `qwen3:8b` | `qwen3:8b` | LLM model to use (must be installed in Ollama) |
 | `PDF_FILE` | `pdfs/test.pdf` | N/A | Path to PDF file to analyze |
 | `CUSTOM_PROMPT` | `"Explain this document."` | N/A | Custom prompt for PDF analysis |
+| `PIPER_URL` | `http://localhost:5000` | `http://localhost:5000` | Piper TTS API endpoint |
 
 **Important:** 
 - **Docker mode** uses `http://ollama:11434` (internal Docker service name)
@@ -225,13 +263,13 @@ Replace the default prompt with your own use case. Edit `.env` or pass `CUSTOM_P
 
 ```bash
 # Extract structured data (JSON format)
-make run-pdf PDF_FILE=pdfs/test.pdf CUSTOM_PROMPT="Extract all dates, names, and amounts as JSON"
+make run-cli PDF_FILE=pdfs/test.pdf CUSTOM_PROMPT="Extract all JSON data"
 
-# Generate specific summary
-make run-pdf PDF_FILE=pdfs/test.pdf CUSTOM_PROMPT="Create a 3-paragraph executive summary"
+# Generate specific summary with speech
+make run-cli PDF_FILE=pdfs/test.pdf CUSTOM_PROMPT="Create summary" ARGS="--tts"
 
 # Q&A mode  
-make run-pdf PDF_FILE=pdfs/test.pdf CUSTOM_PROMPT="What are the key risks discussed in this document?"
+make run-cli PDF_FILE=pdfs/test.pdf CUSTOM_PROMPT="What are the risks?"
 ```
 
 The system prompt used is:
@@ -249,7 +287,7 @@ The system prompt used is:
 | `make help` | Show all available targets |
 | `make up` | Start Ollama + Papyrus Docker stack (`docker-compose up`) |
 | `make down` | Stop and remove containers (`docker-compose down`) |
-| `make run-pdf PDF_FILE=... [CUSTOM_PROMPT=...]` | Analyze a PDF (via Docker) |
+| `make run-cli PDF_FILE=... [CUSTOM_PROMPT=...]` | Run CLI in container |
 | `make build` | Build binary locally (default: linux/amd64) |
 | `make run ARGS="..."` | Build and run binary locally (requires local Ollama at localhost:11434) |
 | `make test` | Run automated tests |
@@ -269,6 +307,7 @@ The system prompt used is:
 | `papyrus --export` | Analyze, format as Markdown, and exit |
 | `papyrus --no-cache` | Disable local semantic caching |
 | `papyrus --max-context N` | Configure conversation history limit |
+| `papyrus --tts` | Enable text-to-speech for responses |
 
 ## Troubleshooting
 
@@ -346,7 +385,7 @@ The system prompt used is:
 
 **Details:**
 - PDFs must be in the `./pdfs/` directory (it's mounted as `/pdfs` in containers)
-- Use relative paths: `make run-pdf PDF_FILE=pdfs/myfile.pdf` (not absolute paths)
+- Use relative paths: `make run-cli PDF_FILE=pdfs/myfile.pdf` (not absolute paths)
 - Files should be readable: `chmod 644 pdfs/yourfile.pdf`
 
 ---
