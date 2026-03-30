@@ -4,3 +4,9 @@ voice/
 ollama_data/
 .github/
 .env
+*.exe
+*.txt
+*.log
+*.csv   
+*.db
+*.sqlite
