@@ -100,9 +100,8 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 		},
 	}
 
-	if c.IsSSML {
-		req.Messages[0].Content += "\n\nIMPORTANT: Wrap your entire response in <speak> tags. For better speech synthesis, use SSML elements like <break time=\"500ms\"/> between logical sections or after complex points."
-	}
+	// Note: SSML generation is handled by the TTS markdown-to-SSML converter,
+	// not by the LLM. This keeps LLM output clean and allows proper markdown processing.
 
 	// Append all previous messages (conversation history)
 	req.Messages = append(req.Messages, messages...)
@@ -173,9 +172,8 @@ func (c *Client) SendMessageWithDoc(messages []ChatMessage, userMessage, documen
 
 Be thorough but concise. Use bullet points and sections to organize your explanation.`
 
-	if c.IsSSML {
-		systemPrompt += "\n\nIMPORTANT: Wrap your entire response in <speak> tags. For better speech synthesis, use SSML elements like <break time=\"500ms\"/> between logical sections or after complex points."
-	}
+	// Note: SSML generation is handled by the TTS markdown-to-SSML converter,
+	// not by the LLM. This keeps LLM output clean and allows proper markdown processing.
 
 	// Include document context in system message for first message, reference for follow-ups
 	if documentContext != "" {

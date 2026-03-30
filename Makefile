@@ -21,30 +21,21 @@ help: ## Show available targets
 		"test"  "Run tests" \
 		"build" "Build binary for GOOS/GOARCH (default: linux/amd64)" \
 		"clean" "Remove bin directory" \
-		"up"    "Start full infra stack (Ollama + Piper + OpenTTS)" \
+		"up"    "Start full infra stack (Ollama + Piper)" \
 		"up-piper" "Start only the Piper TTS service" \
-		"up-opentts" "Start only the OpenTTS service" \
 		"up-ollama" "Start only the Ollama LLM service" \
 		"down"  "Stop and remove all containers" \
 		"run-cli" "Run the Papyrus CLI in a container (requires 'make up')" \
 		"run"   "Run the Papyrus binary locally on host" \
 		"docker-build" "Build the Papyrus Docker image"
 
-up: ## Start Ollama + Piper + OpenTTS stack
-	@echo "Ensuring required voice models are downloaded..."
-	@docker-compose run --rm voice-downloader
-	@echo "Starting full stack (Ollama + Piper + OpenTTS)..."
+up: ## Start Ollama + Piper stack
+	@echo "Starting full stack (Ollama + Piper)..."
 	@docker-compose up -d --build
 
 up-piper: ## Start only the Piper service
 	@echo "Starting Piper container..."
 	@docker-compose up -d piper
-
-up-opentts: ## Start only the OpenTTS service
-	@echo "Ensuring required voice models are downloaded..."
-	@docker-compose run --rm voice-downloader
-	@echo "Starting OpenTTS container..."
-	@docker-compose up -d opentts
 
 up-ollama: ## Start only the Ollama service
 	@echo "Starting Ollama container..."
@@ -85,10 +76,10 @@ build: ## Build binary for GOOS/GOARCH (default: linux/amd64)
 clean: ## Remove bin directory
 	@rm -rf bin
 
-run: ## Run binary locally on host (requires 'make up' to provide Ollama/Piper/OpenTTS)
+run: ## Run binary locally on host (requires 'make up' to provide Ollama/Piper services)
 	@echo "Running locally against Docker infra..."
 	@$(MAKE) build
-	@OLLAMA_URL=http://localhost:11434 PIPER_URL=http://localhost:5000 OPENTTS_URL=http://localhost:5500 ./bin/$(shell go env GOOS)-$(shell go env GOARCH)/papyrus $(ARGS)
+	@OLLAMA_URL=http://localhost:11434 PIPER_URL=http://localhost:5000 ./bin/$(shell go env GOOS)-$(shell go env GOARCH)/papyrus $(ARGS)
 
 docker-build: ## Build Docker image
 	@echo "Building Docker image..."

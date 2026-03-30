@@ -27,7 +27,6 @@ func main() {
 	maxContext := fs.Int("max-context", 8192, "Maximum tokens to keep in conversation history before pruning")
 	exportFlag := fs.Bool("export", false, "Analyze document, export conversation to Markdown, and exit instantly")
 	ttsFlag := fs.Bool("tts", false, "Enable text-to-speech for model responses")
-	ttsEngineFlag := fs.String("tts-engine", "piper", "TTS engine to use (piper or opentts)")
 
 	// Parse flags (allowing positional args to remain)
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -36,12 +35,9 @@ func main() {
 	}
 
 	// Fallback for flags passed after positional args
-	for i, arg := range os.Args {
+	for _, arg := range os.Args {
 		if arg == "--tts" {
 			*ttsFlag = true
-		}
-		if (arg == "--tts-engine" || arg == "-tts-engine") && i+1 < len(os.Args) {
-			*ttsEngineFlag = os.Args[i+1]
 		}
 		if arg == "--no-cache" {
 			*noCache = true
@@ -64,25 +60,16 @@ func main() {
 		return
 	}
 
-	// Initialize TTS if enabled
+	// Initialize TTS if enabled (uses Piper engine with SSML support)
 	var ttsEngine tts.TTSEngine
 	isSSML := false
 	if *ttsFlag {
-		switch strings.ToLower(*ttsEngineFlag) {
-		case "opentts":
-			openttsURL := getEnv("OPENTTS_URL", "http://localhost:5500")
-			vClient := tts.NewOpenTTSClient(openttsURL)
-			vClient.Voice = strings.Trim(os.Getenv("OPENTTS_VOICE"), "\"' ")
-			ttsEngine = vClient
-			isSSML = true
-			fmt.Printf("[TTS] Using OpenTTS at %s (Voice: %s, SSML enabled)\n", openttsURL, vClient.Voice)
-		case "piper":
-			fallthrough
-		default:
-			piperURL := getEnv("PIPER_URL", "http://localhost:5000")
-			ttsEngine = tts.NewPiperClient(piperURL)
-			fmt.Printf("[TTS] Using Piper at %s\n", piperURL)
-		}
+		piperURL := getEnv("PIPER_URL", "http://localhost:5000")
+		piperClient := tts.NewPiperClient(piperURL)
+		piperClient.DefaultVoice = strings.Trim(os.Getenv("PIPER_VOICE"), "\"' ")
+		ttsEngine = piperClient
+		isSSML = true // Piper supports SSML parsing and synthesis
+		fmt.Printf("[TTS] Using Piper at %s (SSML enabled)\n", piperURL)
 	}
 
 	// Handle session resumption via --session flag
@@ -366,14 +353,12 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  --max-context N Max tokens in conversation history before pruning (default: 8192)")
 	fmt.Fprintln(os.Stderr, "  --export        Export session to Markdown and exit immediately")
 	fmt.Fprintln(os.Stderr, "  --tts           Enable text-to-speech for model responses")
-	fmt.Fprintln(os.Stderr, "  --tts-engine E  TTS engine to use: piper or opentts (default: piper)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Environment variables:")
 	fmt.Fprintln(os.Stderr, "  OLLAMA_URL    Ollama base URL (default: http://host.docker.internal:11434)")
 	fmt.Fprintln(os.Stderr, "  OLLAMA_MODEL  Model to use    (default: qwen3:8b)")
-	fmt.Fprintln(os.Stderr, "  PIPER_URL     Piper HTTP URL   (default: http://localhost:5000)")
-	fmt.Fprintln(os.Stderr, "  OPENTTS_URL   OpenTTS HTTP URL  (default: http://localhost:5500)")
-	fmt.Fprintln(os.Stderr, "  OPENTTS_VOICE OpenTTS Voice ID  (e.g., espeak:pt-br)")
+	fmt.Fprintln(os.Stderr, "  PIPER_URL     Piper HTTP URL  (default: http://localhost:5000)")
+	fmt.Fprintln(os.Stderr, "  PIPER_VOICE   Piper voice ID  (default: en_US-hfc_female-medium)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Examples:")
 	fmt.Fprintln(os.Stderr, "  papyrus document.pdf")

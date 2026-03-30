@@ -158,8 +158,7 @@ papyrus --delete <session-id>
 papyrus --export                     # Export to MD and exit
 papyrus --no-cache                   # Disable semantic cache
 papyrus --max-context 4096           # Restrict token history
-papyrus --tts                       # Enable text-to-speech
-papyrus --tts-engine opentts        # Select TTS engine (piper or opentts)
+papyrus --tts                       # Enable text-to-speech (with SSML support)
 ```
 
 **Example workflow:**
@@ -188,15 +187,13 @@ While in interactive mode, the following commands are available:
 
 ## Text-to-Speech (TTS)
 
-Papyrus can generate speech (audio) for model responses using either [Piper](https://github.com/rhasspy/piper) (default) or [OpenTTS](https://github.com/synesthesiam/opentts).
+Papyrus can generate speech (audio) for model responses using [Piper](https://github.com/rhasspy/piper) with SSML support implemented in Papyrus.
 
 ### How it works
 
-1.  **Dual-Engine Architecture:** Papyrus supports multiple TTS backends via a unified interface.
-    - **Piper:** Fast, local, high-quality neural TTS (best for standard text).
-    - **OpenTTS:** A multi-engine TTS server that supports **SSML** (Speech Synthesis Markup Language).
-2.  **Activation:** Use the `--tts` flag. Optionally specify `--tts-engine opentts` to use OpenTTS with SSML.
-3.  **SSML Support:** When using OpenTTS, Papyrus automatically instructs the LLM to output SSML tags (like `<speak>` and `<break time="500ms"/>`), resulting in more natural pacing and pauses.
+1.  **Neural Voice Quality:** Papyrus uses Piper for high-quality, fast, local neural TTS synthesis.
+2.  **SSML Support:** Papyrus parses SSML markup, breaking it into segments and synthesizing each individually with Piper. This enables tags like `<speak>`, `<break time="500ms"/>`, and `<voice>` for precise control over speech pacing, pauses, and voice switching—without requiring SSML support in Piper itself.
+3.  **Activation:** Use the `--tts` flag to enable text-to-speech.
 4.  **Output:** Audio files are saved as `.wav` files in the `voice/` directory.
     - Initial explanation: `voice/<session-id>_initial.wav`
     - REPL responses: `voice/<session-id>_<message-index>.wav`
@@ -206,16 +203,12 @@ Papyrus can generate speech (audio) for model responses using either [Piper](htt
 | Variable | Default | Description |
 |----------|---|-------------|
 | `PIPER_URL` | `http://localhost:5000` | Piper HTTP endpoint |
-| `OPENTTS_URL` | `http://localhost:5500` | OpenTTS HTTP endpoint |
-| `OPENTTS_VOICE` | N/A | OpenTTS Voice ID (e.g., `espeak:pt-br`) |
+| `PIPER_VOICE` | `pt_BR-faber-medium` | Piper Voice (e.g., `pt_BR-faber-medium`, `en_US-lessac-medium`) |
 
 **Example:**
 ```bash
-# Analyze with Piper (default)
+# Analyze with TTS (SSML support enabled in Papyrus)
 make run-cli PDF_FILE=pdfs/report.pdf ARGS="--tts"
-
-# Analyze with OpenTTS and SSML
-make run-cli PDF_FILE=pdfs/report.pdf ARGS="--tts --tts-engine opentts"
 ```
 
 ### Changing the TTS Voice
@@ -245,7 +238,6 @@ cp .env.example .env
 | `PDF_FILE` | `pdfs/test.pdf` | N/A | Path to PDF file to analyze |
 | `CUSTOM_PROMPT` | `"Explain this document."` | N/A | Custom prompt for PDF analysis |
 | `PIPER_URL` | `http://localhost:5000` | `http://localhost:5000` | Piper TTS API endpoint |
-| `OPENTTS_URL` | `http://localhost:5500` | `http://localhost:5500` | OpenTTS API endpoint |
 
 **Important:** 
 - **Docker mode** uses `http://ollama:11434` (internal Docker service name)
@@ -314,8 +306,7 @@ The system prompt used is:
 | `papyrus --export` | Analyze, format as Markdown, and exit |
 | `papyrus --no-cache` | Disable local semantic caching |
 | `papyrus --max-context N` | Configure conversation history limit |
-| `papyrus --tts` | Enable text-to-speech for responses |
-| `papyrus --tts-engine` | Select engine: `piper` (default) or `opentts` |
+| `papyrus --tts` | Enable text-to-speech for responses (with SSML) |
 
 ## Troubleshooting
 

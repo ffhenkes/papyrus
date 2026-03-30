@@ -3,28 +3,55 @@ package tts
 import (
 	"bytes"
 	"context"
-	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
 func TestPiperSynthesize(t *testing.T) {
-	// Create a mock Piper server
+	// Create a mock Piper server that returns valid WAV data
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		text := r.URL.Query().Get("text")
 		if text == "" {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		// Return dummy WAV data
+		// Return a minimal valid WAV file (44.1kHz, mono, 16-bit)
+		// RIFF header + fmt chunk + data chunk
 		w.Header().Set("Content-Type", "audio/wav")
-		_, _ = fmt.Fprint(w, "RIFF....WAVEfmt ....data....")
+
+		// Minimal WAV structure: RIFF header (12) + fmt chunk (24) + data chunk (8) + 100 bytes of zeros
+		wav := []byte{
+			// RIFF header
+			'R', 'I', 'F', 'F', // "RIFF"
+			136, 0, 0, 0, // File size - 8 (136 = 44 + 100 - 8)
+			'W', 'A', 'V', 'E', // "WAVE"
+
+			// fmt subchunk
+			'f', 'm', 't', ' ', // "fmt "
+			16, 0, 0, 0, // Subchunk1Size (16 for PCM)
+			1, 0, // AudioFormat (1 = PCM)
+			1, 0, // NumChannels (1 = mono)
+			68, 172, 0, 0, // SampleRate (44100)
+			16, 177, 2, 0, // ByteRate
+			2, 0, // BlockAlign
+			16, 0, // BitsPerSample (16)
+
+			// data subchunk
+			'd', 'a', 't', 'a', // "data"
+			100, 0, 0, 0, // Subchunk2Size (100 bytes)
+		}
+		// Add 100 bytes of PCM data (silence)
+		for i := 0; i < 100; i++ {
+			wav = append(wav, 0)
+		}
+
+		_, _ = w.Write(wav)
 	}))
 	defer ts.Close()
 
 	client := NewPiperClient(ts.URL)
+	client.DefaultVoice = "pt_BR-faber-medium" // Set default voice
 
 	// Test synthesis
 	data, err := client.Synthesize(context.Background(), "Hello World", false)
@@ -40,54 +67,6 @@ func TestPiperSynthesize(t *testing.T) {
 	_, err = client.Synthesize(context.Background(), "", false)
 	if err == nil {
 		t.Errorf("Expected error for empty text, got nil")
-	}
-}
-
-func TestOpenTTSSynthesize(t *testing.T) {
-	// Create a mock OpenTTS server
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-
-		body, _ := io.ReadAll(r.Body)
-		if len(body) == 0 {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		contentType := r.Header.Get("Content-Type")
-		if contentType == "application/ssml+xml" {
-			if !bytes.Contains(body, []byte("<speak>")) {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-		}
-
-		w.Header().Set("Content-Type", "audio/wav")
-		_, _ = fmt.Fprint(w, "OPENTTS_AUDIO_DATA")
-	}))
-	defer ts.Close()
-
-	client := NewOpenTTSClient(ts.URL)
-
-	// Test SSML synthesis
-	data, err := client.Synthesize(context.Background(), "<speak>Hello</speak>", true)
-	if err != nil {
-		t.Fatalf("SSML Synthesize failed: %v", err)
-	}
-	if string(data) != "OPENTTS_AUDIO_DATA" {
-		t.Errorf("Got %q, want OPENTTS_AUDIO_DATA", string(data))
-	}
-
-	// Test plain text synthesis
-	data, err = client.Synthesize(context.Background(), "Hello", false)
-	if err != nil {
-		t.Fatalf("Plain Synthesize failed: %v", err)
-	}
-	if string(data) != "OPENTTS_AUDIO_DATA" {
-		t.Errorf("Got %q, want OPENTTS_AUDIO_DATA", string(data))
 	}
 }
 
