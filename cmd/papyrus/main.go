@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"papyrus/pkg/llm"
 	"papyrus/pkg/pdf"
 	"papyrus/pkg/repl"
+	"papyrus/pkg/tts"
 )
 
 func main() {
@@ -24,12 +26,24 @@ func main() {
 	noCache := fs.Bool("no-cache", false, "Disable semantic caching for LLM responses")
 	maxContext := fs.Int("max-context", 8192, "Maximum tokens to keep in conversation history before pruning")
 	exportFlag := fs.Bool("export", false, "Analyze document, export conversation to Markdown, and exit instantly")
+	ttsFlag := fs.Bool("tts", false, "Enable text-to-speech for model responses")
 
 	// Parse flags (allowing positional args to remain)
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Fallback for flags passed after positional args
+	for _, arg := range os.Args {
+		if arg == "--tts" {
+			*ttsFlag = true
+		}
+		if arg == "--no-cache" {
+			*noCache = true
+		}
+	}
+
 	args := fs.Args()
 
 	sessionDir := getSessionDir()
@@ -46,9 +60,21 @@ func main() {
 		return
 	}
 
+	// Initialize TTS if enabled (uses Piper engine with SSML support)
+	var ttsEngine tts.TTSEngine
+	isSSML := false
+	if *ttsFlag {
+		piperURL := getEnv("PIPER_URL", "http://localhost:5000")
+		piperClient := tts.NewPiperClient(piperURL)
+		piperClient.DefaultVoice = strings.Trim(os.Getenv("PIPER_VOICE"), "\"' ")
+		ttsEngine = piperClient
+		isSSML = true // Piper supports SSML parsing and synthesis
+		fmt.Printf("[TTS] Using Piper at %s (SSML enabled)\n", piperURL)
+	}
+
 	// Handle session resumption via --session flag
 	if *sessionID != "" {
-		handleResumeSession(*sessionID, sessionDir, *noCache, *maxContext)
+		handleResumeSession(*sessionID, sessionDir, *noCache, *maxContext, ttsEngine, isSSML)
 		return
 	}
 
@@ -113,6 +139,18 @@ func main() {
 		client.Cache = llm.NewResponseCache(filepath.Join(homeDir, ".papyrus", "cache", conv.SessionID+".cache.json"))
 	}
 	client.DocumentText = text
+	client.IsSSML = isSSML
+
+	// Handle case where flags were passed after the filename
+	if !*ttsFlag && len(args) > 0 {
+		// Simple check for --tts in the remaining args if not already set
+		for _, arg := range os.Args {
+			if arg == "--tts" {
+				*ttsFlag = true
+				break
+			}
+		}
+	}
 
 	// Send initial message with document context
 	fmt.Println("\n=== Explanation ===")
@@ -127,6 +165,17 @@ func main() {
 	// Add messages to conversation for multi-turn support
 	conv.AddMessage("user", userPrompt)
 	conv.AddMessage("assistant", explanation)
+
+	// Generate speech if enabled and text is not empty/just symbols
+	if ttsEngine != nil && strings.TrimSpace(tts.CleanMarkdown(explanation)) != "" {
+		voiceFile := filepath.Join("voice", fmt.Sprintf("%s_initial.wav", conv.SessionID))
+		fmt.Printf("\n[TTS] Generating speech: %s... ", voiceFile)
+		if err := synthesizeToFile(context.Background(), ttsEngine, explanation, isSSML, voiceFile); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		} else {
+			fmt.Println("Done.")
+		}
+	}
 
 	fmt.Println() // ensure newline after stream finishes
 	fmt.Println(llm.FormatTokenStats(stats))
@@ -151,6 +200,9 @@ func main() {
 
 	// Enter interactive REPL mode for follow-up questions
 	r := repl.New(client, conv, sessionDir, *maxContext)
+	if ttsEngine != nil {
+		r.WithTTS(ttsEngine, isSSML)
+	}
 	if err := r.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "REPL error: %v\n", err)
 		os.Exit(1)
@@ -197,7 +249,7 @@ func handleListSessions(sessionDir string) {
 }
 
 // handleResumeSession loads an existing session and enters REPL mode.
-func handleResumeSession(sessionID, sessionDir string, noCache bool, maxContext int) {
+func handleResumeSession(sessionID, sessionDir string, noCache bool, maxContext int, ttsEngine tts.TTSEngine, isSSML bool) {
 	conv, err := conversation.LoadSession(sessionID, sessionDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -212,6 +264,10 @@ func handleResumeSession(sessionID, sessionDir string, noCache bool, maxContext 
 	fmt.Printf("# Papyrus → %s (%s)\n", ollamaURL, modelName)
 	fmt.Println(strings.Repeat("─", 60))
 
+	// Normal flow will use ttsFlag from global flags
+	// But in resume mode, we need to check if --tts was passed
+	// (Actually fs.Parse was called at the start of main)
+
 	// Recreate LLM client with document context
 	client := llm.NewClient(ollamaURL, modelName, config.MaxTokens)
 	if !noCache {
@@ -219,6 +275,7 @@ func handleResumeSession(sessionID, sessionDir string, noCache bool, maxContext 
 		client.Cache = llm.NewResponseCache(filepath.Join(homeDir, ".papyrus", "cache", sessionID+".cache.json"))
 	}
 	client.DocumentText = conv.DocumentText
+	client.IsSSML = isSSML
 
 	// Display last few messages as context
 	fmt.Println("\n--- Conversation so far ---")
@@ -242,10 +299,28 @@ func handleResumeSession(sessionID, sessionDir string, noCache bool, maxContext 
 
 	// Enter REPL with existing conversation
 	r := repl.New(client, conv, sessionDir, maxContext)
+	if ttsEngine != nil {
+		r.WithTTS(ttsEngine, isSSML)
+	}
 	if err := r.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "REPL error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// synthesizeToFile is a helper to run synthesis and write to disk
+func synthesizeToFile(ctx context.Context, engine tts.TTSEngine, text string, isSSML bool, outputPath string) error {
+	data, err := engine.Synthesize(ctx, text, isSSML)
+	if err != nil {
+		return err
+	}
+
+	dir := filepath.Dir(outputPath)
+	if err := os.MkdirAll(dir, 0750); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	return os.WriteFile(outputPath, data, 0600)
 }
 
 // getEnv retrieves an environment variable with a fallback value.
@@ -277,10 +352,13 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  --no-cache      Disable semantic caching for LLM responses")
 	fmt.Fprintln(os.Stderr, "  --max-context N Max tokens in conversation history before pruning (default: 8192)")
 	fmt.Fprintln(os.Stderr, "  --export        Export session to Markdown and exit immediately")
+	fmt.Fprintln(os.Stderr, "  --tts           Enable text-to-speech for model responses")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Environment variables:")
 	fmt.Fprintln(os.Stderr, "  OLLAMA_URL    Ollama base URL (default: http://host.docker.internal:11434)")
 	fmt.Fprintln(os.Stderr, "  OLLAMA_MODEL  Model to use    (default: qwen3:8b)")
+	fmt.Fprintln(os.Stderr, "  PIPER_URL     Piper HTTP URL  (default: http://localhost:5000)")
+	fmt.Fprintln(os.Stderr, "  PIPER_VOICE   Piper voice ID  (default: en_US-hfc_female-medium)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Examples:")
 	fmt.Fprintln(os.Stderr, "  papyrus document.pdf")

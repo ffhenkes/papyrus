@@ -2,13 +2,16 @@ package repl
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"papyrus/pkg/conversation"
 	"papyrus/pkg/llm"
+	"papyrus/pkg/tts"
 )
 
 // REPL represents a read-eval-print loop for interactive conversations.
@@ -21,6 +24,8 @@ type REPL struct {
 	sessionDir string
 	stats      llm.TokenStats
 	maxContext int
+	ttsEngine  tts.TTSEngine
+	isSSML     bool
 }
 
 // New creates a new REPL session.
@@ -34,6 +39,12 @@ func New(client *llm.Client, conv *conversation.Conversation, sessionDir string,
 		sessionDir: sessionDir,
 		maxContext: maxContext,
 	}
+}
+
+// WithTTS enables text-to-speech for the REPL.
+func (r *REPL) WithTTS(engine tts.TTSEngine, isSSML bool) {
+	r.ttsEngine = engine
+	r.isSSML = isSSML
 }
 
 // Start begins the interactive REPL loop.
@@ -146,6 +157,26 @@ func (r *REPL) sendMessage(userMessage string) bool {
 
 	// Display token stats (newline provided by writer)
 	_, _ = fmt.Fprintln(r.writer, "\n\n"+llm.FormatTokenStats(stats))
+
+	// Generate speech if TTS is enabled and response is not empty
+	if r.ttsEngine != nil && strings.TrimSpace(tts.CleanMarkdown(response)) != "" {
+		voiceFile := filepath.Join("voice", fmt.Sprintf("%s_%d.wav", r.conv.SessionID, len(r.conv.Messages)/2))
+		_, _ = fmt.Fprintf(r.writer, "[TTS] Generating speech: %s... ", voiceFile)
+
+		data, err := r.ttsEngine.Synthesize(context.Background(), response, r.isSSML)
+		if err != nil {
+			_, _ = fmt.Fprintf(r.writer, "Error: %v\n", err)
+		} else {
+			dir := filepath.Dir(voiceFile)
+			if err := os.MkdirAll(dir, 0750); err != nil {
+				_, _ = fmt.Fprintf(r.writer, "Error creating directory: %v\n", err)
+			} else if err := os.WriteFile(voiceFile, data, 0600); err != nil {
+				_, _ = fmt.Fprintf(r.writer, "Error saving audio: %v\n", err)
+			} else {
+				_, _ = fmt.Fprintln(r.writer, "Done.")
+			}
+		}
+	}
 
 	return false
 }

@@ -19,30 +19,23 @@ done
 
 echo "!! Ollama is up! Starting processing..."
 
-# In Docker, pdfs are mounted at /pdfs. Otherwise use pdfs/ from current directory
-if [ -d /pdfs ]; then
-  PDF_DEFAULT="/pdfs/test.pdf"
-else
-  PDF_DEFAULT="pdfs/test.pdf"
+# Configuration from environment (with defaults)
+PDF_FILE_PATH="${PDF_FILE:-/pdfs/test.pdf}"
+PROMPT_CONTENT="${CUSTOM_PROMPT:-"Analyze this document."}"
+
+# If first positional argument exists and is not a flag, use it as PDF path
+if [[ -n "$1" && ! "$1" =~ ^- ]]; then
+  PDF_FILE_PATH="$1"
+  shift
 fi
 
-PDF_FILE_PATH="${PDF_FILE:-$PDF_DEFAULT}"
-
-# Check if the file exists
-if [ ! -f "$PDF_FILE_PATH" ]; then
-  echo "--------------------------------------------------------"
-  echo "Error: PDF file not found at: $PDF_FILE_PATH"
-  echo "Available locations checked: $PDF_DEFAULT"
-  echo "--------------------------------------------------------"
-  exit 0
+# If second positional argument exists and is not a flag, use it as prompt
+if [[ -n "$1" && ! "$1" =~ ^- ]]; then
+  PROMPT_CONTENT="$1"
+  shift
 fi
-
-# Get the path from .env or default to current directory (.)
-BIN_DIR="${PAPYRUS_PATH:-.}"
-
-# Construct the full path to the binary
-# This handles both ./bin/papyrus and ./papyrus
-FULL_BIN_PATH="${BIN_DIR}/papyrus"
 
 # Run papyrus
-"$FULL_BIN_PATH" "$PDF_FILE_PATH" "${CUSTOM_PROMPT}"
+# "$@" now contains only flags (if any were passed before or after the positional args)
+# or all arguments if we shifted them properly.
+"$FULL_BIN_PATH" "$@" "$PDF_FILE_PATH" "$PROMPT_CONTENT"

@@ -13,8 +13,9 @@ import (
 
 // ChatMessage represents a single message in the conversation.
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role             string `json:"role"`
+	Content          string `json:"content"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 // ChatRequest is the request payload for the Ollama API.
@@ -32,9 +33,10 @@ type ChatOptions struct {
 
 // ChatResponse is the response payload from the Ollama API.
 type ChatResponse struct {
-	Message ChatMessage `json:"message"`
-	Error   string      `json:"error,omitempty"`
-	Done    bool        `json:"done"`
+	Message   ChatMessage `json:"message"`
+	Reasoning string      `json:"reasoning_content,omitempty"`
+	Error     string      `json:"error,omitempty"`
+	Done      bool        `json:"done"`
 }
 
 // Client represents an Ollama API client.
@@ -44,6 +46,7 @@ type Client struct {
 	MaxTokens    int
 	DocumentText string         // Document text stored once to avoid resending on each follow-up
 	Cache        *ResponseCache // Optional response cache
+	IsSSML       bool           // If true, instructions the model to output SSML
 }
 
 // NewClient creates a new Ollama API client.
@@ -96,6 +99,9 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 			},
 		},
 	}
+
+	// Note: SSML generation is handled by the TTS markdown-to-SSML converter,
+	// not by the LLM. This keeps LLM output clean and allows proper markdown processing.
 
 	// Append all previous messages (conversation history)
 	req.Messages = append(req.Messages, messages...)
@@ -165,6 +171,9 @@ func (c *Client) SendMessageWithDoc(messages []ChatMessage, userMessage, documen
 5. Note the document structure and how it's organized
 
 Be thorough but concise. Use bullet points and sections to organize your explanation.`
+
+	// Note: SSML generation is handled by the TTS markdown-to-SSML converter,
+	// not by the LLM. This keeps LLM output clean and allows proper markdown processing.
 
 	// Include document context in system message for first message, reference for follow-ups
 	if documentContext != "" {
@@ -240,8 +249,8 @@ func (c *Client) doRequestStream(req ChatRequest, onToken func(string)) (string,
 	startTime := time.Now()
 	go spinner(spinnerDone, c.ModelName, startTime)
 
-	client := &http.Client{}
-	resp, err := client.Do(httpReq)
+	httpClient := &http.Client{}
+	resp, err := httpClient.Do(httpReq)
 
 	if err != nil {
 		close(spinnerDone)
@@ -259,6 +268,8 @@ func (c *Client) doRequestStream(req ChatRequest, onToken func(string)) (string,
 
 	if req.Stream {
 		decoder := json.NewDecoder(resp.Body)
+		lastType := "content" // current stream state: "content" or "reasoning"
+
 		for {
 			var chatResp ChatResponse
 			err := decoder.Decode(&chatResp)
@@ -285,7 +296,30 @@ func (c *Client) doRequestStream(req ChatRequest, onToken func(string)) (string,
 				firstToken = true
 			}
 
+			// Handle Reasoning Content (native field)
+			if chatResp.Reasoning != "" {
+				if lastType != "reasoning" {
+					if onToken != nil {
+						onToken("<think>\n")
+					}
+					fullResponse.WriteString("<think>\n")
+					lastType = "reasoning"
+				}
+				if onToken != nil {
+					onToken(chatResp.Reasoning)
+				}
+				fullResponse.WriteString(chatResp.Reasoning)
+			}
+
+			// Handle Regular Content
 			if chatResp.Message.Content != "" {
+				if lastType == "reasoning" {
+					if onToken != nil {
+						onToken("\n</think>\n\n")
+					}
+					fullResponse.WriteString("\n</think>\n\n")
+					lastType = "content"
+				}
 				if onToken != nil {
 					onToken(chatResp.Message.Content)
 				}
@@ -293,6 +327,13 @@ func (c *Client) doRequestStream(req ChatRequest, onToken func(string)) (string,
 			}
 
 			if chatResp.Done {
+				// Ensure think block is closed if the response ended in reasoning
+				if lastType == "reasoning" {
+					if onToken != nil {
+						onToken("\n</think>\n")
+					}
+					fullResponse.WriteString("\n</think>\n")
+				}
 				break
 			}
 		}
@@ -332,7 +373,7 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dms", d.Milliseconds())
 	case d < time.Minute:
 		return fmt.Sprintf("%.1fs", d.Seconds())
-	case d < time.Hour:
+	case d < time.Minute*60:
 		return fmt.Sprintf("%.1fm", d.Minutes())
 	default:
 		return fmt.Sprintf("%.1fh", d.Hours())

@@ -6,9 +6,12 @@ services:
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:8b}
       - CUSTOM_PROMPT=${CUSTOM_PROMPT:-"Explain this document."}
+      - PIPER_URL=${PIPER_URL:-http://piper:5000}
+      - PDF_FILE=/${PDF_FILE:-pdfs/test.pdf}
     volumes:
       - ./pdfs:/pdfs:ro
-    command: ["/${PDF_FILE:-pdfs/test.pdf}", "${CUSTOM_PROMPT}"]
+      - ./voice:/app/voice
+    command: []
     depends_on:
       - ollama
 
@@ -22,3 +25,33 @@ services:
       - "11434:11434"
     volumes:
       - ./ollama_data:/root/.ollama
+
+  piper:
+    image: artibex/piper-http
+    ports:
+      - "5000:5000"
+    environment:
+      - MODEL_DOWNLOAD_LINK=${PIPER_VOICE_URL:-https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx?download=true}
+    volumes:
+      - ./voice:/app/output
+
+  voice-downloader:
+    image: alpine:latest
+    profiles: ["cli"]
+    volumes:
+      - ./voice/piper:/output
+    command: >
+      sh -c "
+      apk add --no-cache -q curl &&
+      echo 'Checking for Piper voices...' &&
+      mkdir -p /output &&
+      if [ ! -f /output/pt_BR-faber-medium.onnx ]; then
+        echo 'Downloading model...' &&
+        curl -fL https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx?download=true -o /output/pt_BR-faber-medium.onnx || exit 1;
+      fi &&
+      if [ ! -f /output/pt_BR-faber-medium.onnx.json ]; then
+        echo 'Downloading config...' &&
+        curl -fL https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx.json?download=true -o /output/pt_BR-faber-medium.onnx.json || exit 1;
+      fi &&
+      echo 'Voice files ready.' &&
+      ls -lah /output/"
