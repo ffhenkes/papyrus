@@ -7,6 +7,8 @@ services:
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:8b}
       - CUSTOM_PROMPT=${CUSTOM_PROMPT:-"Explain this document."}
       - PIPER_URL=${PIPER_URL:-http://piper:5000}
+      - OPENTTS_URL=${OPENTTS_URL:-http://opentts:5500}
+      - OPENTTS_VOICE=${OPENTTS_VOICE:-mimic3:pt-br/gottfried-low}
       - PDF_FILE=/${PDF_FILE:-pdfs/test.pdf}
     volumes:
       - ./pdfs:/pdfs:ro
@@ -14,6 +16,7 @@ services:
     command: []
     depends_on:
       - ollama
+      - opentts
 
   ollama:
     build:
@@ -34,3 +37,29 @@ services:
       - MODEL_DOWNLOAD_LINK=${PIPER_VOICE_URL:-https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx?download=true}
     volumes:
       - ./voice:/app/output
+
+  opentts:
+    image: synesthesiam/opentts:all
+    volumes:
+      - ./voice/piper:/home/opentts/.local/share/piper
+    ports:
+      - "5500:5500"
+
+  voice-downloader:
+    image: alpine:latest
+    profiles: ["cli"]
+    volumes:
+      - ./voice/piper:/output
+    command: >
+      sh -c "
+      apk add --no-cache -q curl &&
+      echo 'Checking for Piper voices...' &&
+      if [ ! -f /output/pt_BR-faber-medium.onnx ]; then
+        echo 'Downloading model...' &&
+        curl -L https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx -o /output/pt_BR-faber-medium.onnx;
+      fi &&
+      if [ ! -f /output/pt_BR-faber-medium.onnx.json ]; then
+        echo 'Downloading config...' &&
+        curl -L https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx.json -o /output/pt_BR-faber-medium.onnx.json;
+      fi &&
+      echo 'System ready.'"

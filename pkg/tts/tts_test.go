@@ -1,15 +1,16 @@
 package tts
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
-func TestSynthesize(t *testing.T) {
+func TestPiperSynthesize(t *testing.T) {
 	// Create a mock Piper server
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		text := r.URL.Query().Get("text")
@@ -23,38 +24,73 @@ func TestSynthesize(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
-
-	// Create temp directory for output
-	tmpDir, err := os.MkdirTemp("", "papyrus-tts-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
-
-	outputPath := filepath.Join(tmpDir, "test.wav")
+	client := NewPiperClient(ts.URL)
 
 	// Test synthesis
-	err = client.Synthesize("Hello World", outputPath)
+	data, err := client.Synthesize(context.Background(), "Hello World", false)
 	if err != nil {
-		t.Errorf("Synthesize failed: %v", err)
+		t.Fatalf("Synthesize failed: %v", err)
 	}
 
-	// Verify file exists and has content
-	info, err := os.Stat(outputPath)
-	if err != nil {
-		t.Errorf("Output file not found: %v", err)
-	}
-	if info.Size() == 0 {
-		t.Errorf("Output file is empty")
+	if !bytes.Contains(data, []byte("WAVE")) {
+		t.Errorf("Expected WAVE data, got %q", string(data))
 	}
 
 	// Test empty text error
-	err = client.Synthesize("", outputPath)
+	_, err = client.Synthesize(context.Background(), "", false)
 	if err == nil {
 		t.Errorf("Expected error for empty text, got nil")
 	}
 }
+
+func TestOpenTTSSynthesize(t *testing.T) {
+	// Create a mock OpenTTS server
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		body, _ := io.ReadAll(r.Body)
+		if len(body) == 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		contentType := r.Header.Get("Content-Type")
+		if contentType == "application/ssml+xml" {
+			if !bytes.Contains(body, []byte("<speak>")) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+		}
+
+		w.Header().Set("Content-Type", "audio/wav")
+		_, _ = fmt.Fprint(w, "OPENTTS_AUDIO_DATA")
+	}))
+	defer ts.Close()
+
+	client := NewOpenTTSClient(ts.URL)
+
+	// Test SSML synthesis
+	data, err := client.Synthesize(context.Background(), "<speak>Hello</speak>", true)
+	if err != nil {
+		t.Fatalf("SSML Synthesize failed: %v", err)
+	}
+	if string(data) != "OPENTTS_AUDIO_DATA" {
+		t.Errorf("Got %q, want OPENTTS_AUDIO_DATA", string(data))
+	}
+
+	// Test plain text synthesis
+	data, err = client.Synthesize(context.Background(), "Hello", false)
+	if err != nil {
+		t.Fatalf("Plain Synthesize failed: %v", err)
+	}
+	if string(data) != "OPENTTS_AUDIO_DATA" {
+		t.Errorf("Got %q, want OPENTTS_AUDIO_DATA", string(data))
+	}
+}
+
 func TestCleanMarkdown(t *testing.T) {
 	tests := []struct {
 		name     string

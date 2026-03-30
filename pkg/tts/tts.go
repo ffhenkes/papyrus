@@ -1,32 +1,38 @@
 package tts
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 )
 
-// Client handles communication with the Piper TTS service.
-type Client struct {
+// TTSEngine defines the interface for text-to-speech engines.
+type TTSEngine interface {
+	Synthesize(ctx context.Context, text string, isSSML bool) ([]byte, error)
+}
+
+// PiperClient handles communication with the Piper TTS service.
+type PiperClient struct {
 	BaseURL string
 }
 
-// NewClient creates a new TTS client.
-func NewClient(baseURL string) *Client {
-	return &Client{BaseURL: baseURL}
+// NewPiperClient creates a new Piper TTS client.
+func NewPiperClient(baseURL string) *PiperClient {
+	return &PiperClient{BaseURL: baseURL}
 }
 
-// Synthesize sends text to Piper and saves the resulting audio to a WAV file.
-func (c *Client) Synthesize(text string, outputPath string) error {
+// Synthesize sends text to Piper and returns the resulting audio bytes.
+func (c *PiperClient) Synthesize(ctx context.Context, text string, isSSML bool) ([]byte, error) {
 	if text == "" {
-		return fmt.Errorf("text cannot be empty")
+		return nil, fmt.Errorf("text cannot be empty")
 	}
 
+	// Piper doesn't support SSML, so we always clean the text
 	cleanText := CleanMarkdown(text)
 
 	// Prepare the request URL
@@ -35,39 +41,79 @@ func (c *Client) Synthesize(text string, outputPath string) error {
 	fullURL := fmt.Sprintf("%s/?%s", c.BaseURL, params.Encode())
 
 	// Make the HTTP request
-	// #nosec G107
-	resp, err := http.Get(fullURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
 	if err != nil {
-		return fmt.Errorf("failed to connect to Piper: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to Piper: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("piper returned error (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("piper returned error (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	// Ensure the output directory exists
-	dir := filepath.Dir(outputPath)
-	if err := os.MkdirAll(dir, 0750); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
+	return io.ReadAll(resp.Body)
+}
+
+// OpenTTSClient handles communication with the OpenTTS service.
+type OpenTTSClient struct {
+	BaseURL string
+	Voice   string // Default voice ID (e.g., "espeak:en")
+}
+
+// NewOpenTTSClient creates a new OpenTTS client.
+func NewOpenTTSClient(baseURL string) *OpenTTSClient {
+	return &OpenTTSClient{BaseURL: baseURL}
+}
+
+// Synthesize sends text to OpenTTS and returns the resulting audio bytes.
+func (c *OpenTTSClient) Synthesize(ctx context.Context, text string, isSSML bool) ([]byte, error) {
+	if text == "" {
+		return nil, fmt.Errorf("text cannot be empty")
 	}
 
-	// Create the output file
-	// #nosec G304
-	out, err := os.Create(outputPath)
+	params := url.Values{}
+	if c.Voice != "" {
+		params.Add("voice", c.Voice)
+	}
+
+	// Clean markdown to avoid issues with specialized symbols in TTS engines
+	text = CleanMarkdown(text)
+
+	endpoint := fmt.Sprintf("%s/api/tts?%s", c.BaseURL, params.Encode())
+	contentType := "text/plain"
+	if isSSML {
+		contentType = "application/ssml+xml"
+		// Ensure text is wrapped in <speak>
+		trimmed := strings.TrimSpace(text)
+		if !strings.HasPrefix(trimmed, "<speak") {
+			text = fmt.Sprintf("<speak>\n%s\n</speak>", text)
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBufferString(text))
 	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	defer func() { _ = out.Close() }()
+	req.Header.Set("Content-Type", contentType)
 
-	// Stream the response body to the file
-	_, err = io.Copy(out, resp.Body)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to save audio file: %w", err)
+		return nil, fmt.Errorf("failed to connect to OpenTTS: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("opentts returned error (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	return nil
+	return io.ReadAll(resp.Body)
 }
 
 var (
@@ -77,7 +123,7 @@ var (
 	markdownListRegex       = regexp.MustCompile(`(?m)^[\t ]*[-*+]\s`)
 	markdownCodeRegex       = regexp.MustCompile("`")
 	markdownRuleRegex       = regexp.MustCompile(`(?m)^---[\t ]*$`)
-	markdownMiscRegex       = regexp.MustCompile(`[~=|>|$]+`)
+	markdownMiscRegex       = regexp.MustCompile(`[~=|$]+`)
 	markdownThinkRegex      = regexp.MustCompile(`(?s)<think>.*?</think>`)
 )
 

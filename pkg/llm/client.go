@@ -46,6 +46,7 @@ type Client struct {
 	MaxTokens    int
 	DocumentText string         // Document text stored once to avoid resending on each follow-up
 	Cache        *ResponseCache // Optional response cache
+	IsSSML       bool           // If true, instructions the model to output SSML
 }
 
 // NewClient creates a new Ollama API client.
@@ -97,6 +98,10 @@ func (c *Client) SendMessage(messages []ChatMessage, userMessage string, onToken
 Be thorough but concise. Use bullet points and sections to organize your explanation.`,
 			},
 		},
+	}
+
+	if c.IsSSML {
+		req.Messages[0].Content += "\n\nIMPORTANT: Wrap your entire response in <speak> tags. For better speech synthesis, use SSML elements like <break time=\"500ms\"/> between logical sections or after complex points."
 	}
 
 	// Append all previous messages (conversation history)
@@ -167,6 +172,10 @@ func (c *Client) SendMessageWithDoc(messages []ChatMessage, userMessage, documen
 5. Note the document structure and how it's organized
 
 Be thorough but concise. Use bullet points and sections to organize your explanation.`
+
+	if c.IsSSML {
+		systemPrompt += "\n\nIMPORTANT: Wrap your entire response in <speak> tags. For better speech synthesis, use SSML elements like <break time=\"500ms\"/> between logical sections or after complex points."
+	}
 
 	// Include document context in system message for first message, reference for follow-ups
 	if documentContext != "" {
@@ -242,8 +251,8 @@ func (c *Client) doRequestStream(req ChatRequest, onToken func(string)) (string,
 	startTime := time.Now()
 	go spinner(spinnerDone, c.ModelName, startTime)
 
-	client := &http.Client{}
-	resp, err := client.Do(httpReq)
+	httpClient := &http.Client{}
+	resp, err := httpClient.Do(httpReq)
 
 	if err != nil {
 		close(spinnerDone)
@@ -366,7 +375,7 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dms", d.Milliseconds())
 	case d < time.Minute:
 		return fmt.Sprintf("%.1fs", d.Seconds())
-	case d < time.Hour:
+	case d < time.Minute*60:
 		return fmt.Sprintf("%.1fm", d.Minutes())
 	default:
 		return fmt.Sprintf("%.1fh", d.Hours())
