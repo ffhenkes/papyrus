@@ -93,25 +93,40 @@ func main() {
 		os.Exit(1)
 	}
 
-	pdfPath := args[0]
+	filePath := args[0]
 	customPrompt := ""
 	if len(args) > 1 {
 		customPrompt = strings.Join(args[1:], " ")
 	}
 
-	// Extract and analyze PDF
+	// Extract and analyze document
 	ollamaURL := getEnv("OLLAMA_URL", config.DefaultOllamaURL)
 	modelName := getEnv("OLLAMA_MODEL", config.DefaultModel)
 
-	fmt.Printf("[PDF] Reading PDF: %s\n", pdfPath)
-	text, err := pdf.ExtractText(pdfPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error extracting PDF text: %v\n", err)
-		os.Exit(1)
+	var text string
+	var err error
+
+	if strings.HasSuffix(strings.ToLower(filePath), ".txt") {
+		// Text file input (e.g., from OCR sidecar)
+		fmt.Printf("[TXT] Reading text file: %s\n", filePath)
+		textBytes, readErr := os.ReadFile(filepath.Clean(filePath))
+		if readErr != nil {
+			fmt.Fprintf(os.Stderr, "Error reading text file: %v\n", readErr)
+			os.Exit(1)
+		}
+		text = string(textBytes)
+	} else {
+		// PDF input
+		fmt.Printf("[PDF] Reading PDF: %s\n", filePath)
+		text, err = pdf.ExtractText(filePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error extracting PDF text: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	if strings.TrimSpace(text) == "" {
-		fmt.Fprintln(os.Stderr, "Error: could not extract any text from the PDF (scanned image PDF?)")
+		fmt.Fprintln(os.Stderr, "Error: could not extract any text from the input file")
 		os.Exit(1)
 	}
 
@@ -120,7 +135,7 @@ func main() {
 	fmt.Println(strings.Repeat("─", 60))
 
 	// Create conversation with the PDF document
-	conv := conversation.New(pdfPath, text)
+	conv := conversation.New(filePath, text)
 
 	// Check if session already exists and prompt
 	if conversation.SessionExists(conv.SessionID, sessionDir) {
@@ -138,8 +153,6 @@ func main() {
 	if customPrompt != "" {
 		userPrompt = customPrompt
 	}
-
-	fullUserMessage := fmt.Sprintf("%s\n\n<document>\n%s\n</document>", userPrompt, text)
 
 	// Create LLM client
 	client := llm.NewClient(ollamaURL, modelName, config.MaxTokens)
@@ -199,7 +212,7 @@ func main() {
 
 	// Send initial message with document context
 	fmt.Println("\n=== Explanation ===")
-	explanation, stats, err := client.SendMessageWithDoc([]llm.ChatMessage{}, fullUserMessage, text, func(token string) {
+	explanation, stats, err := client.SendMessageWithDoc([]llm.ChatMessage{}, userPrompt, text, func(token string) {
 		fmt.Print(token)
 	})
 	if err != nil {
@@ -234,8 +247,8 @@ func main() {
 
 	if *exportFlag {
 		md := conversation.ExportMarkdown(conv)
-		exportFile := fmt.Sprintf("%s_export.md", conv.SessionID)
-		if err := os.WriteFile(exportFile, []byte(md), 0600); err != nil {
+		exportFile := filepath.Clean(fmt.Sprintf("%s_export.md", conv.SessionID))
+		if err := os.WriteFile(exportFile, []byte(md), 0600); err != nil { //nolint:gosec // exportFile is derived from sanitized session ID
 			fmt.Fprintf(os.Stderr, "Failed to write export file: %v\n", err)
 		} else {
 			fmt.Printf("\n[Export] Saved conversation to %s\n", exportFile)
@@ -394,12 +407,13 @@ func synthesizeToFile(ctx context.Context, engine tts.TTSEngine, text string, is
 		return err
 	}
 
-	dir := filepath.Dir(outputPath)
+	cleanPath := filepath.Clean(outputPath)
+	dir := filepath.Dir(cleanPath)
 	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	return os.WriteFile(outputPath, data, 0600)
+	return os.WriteFile(cleanPath, data, 0600) //nolint:gosec // cleanPath is sanitized via filepath.Clean
 }
 
 // getEnv retrieves an environment variable with a fallback value.

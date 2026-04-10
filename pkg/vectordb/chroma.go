@@ -33,7 +33,7 @@ func NewChromaRetriever(url string, embedder embeddings.Embedder, chunkSize, ove
 
 func (c *chromaRetriever) CollectionExists(ctx context.Context, docID string) (bool, error) {
 	name := "papyrus-" + docID
-	endpoint := fmt.Sprintf("%s/api/v1/collections/%s", c.url, name)
+	endpoint := fmt.Sprintf("%s/api/v2/tenants/default_tenant/databases/default_database/collections/%s", c.url, name)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
@@ -65,7 +65,7 @@ func (c *chromaRetriever) CollectionExists(ctx context.Context, docID string) (b
 	c.collectionName = collection.Name
 
 	// Check if it has items
-	countEndpoint := fmt.Sprintf("%s/api/v1/collections/%s/count", c.url, collection.ID)
+	countEndpoint := fmt.Sprintf("%s/api/v2/tenants/default_tenant/databases/default_database/collections/%s/count", c.url, collection.ID)
 	reqCount, _ := http.NewRequestWithContext(ctx, "GET", countEndpoint, nil)
 	respCount, err := http.DefaultClient.Do(reqCount)
 	if err == nil {
@@ -131,7 +131,7 @@ func (c *chromaRetriever) Query(ctx context.Context, query string, topK int) ([]
 		return nil, fmt.Errorf("failed to embed query: %w", err)
 	}
 
-	endpoint := fmt.Sprintf("%s/api/v1/collections/%s/query", c.url, c.collectionID)
+	endpoint := fmt.Sprintf("%s/api/v2/tenants/default_tenant/databases/default_database/collections/%s/query", c.url, c.collectionID)
 
 	queryReq := map[string]interface{}{
 		"query_embeddings": [][]float64{vec},
@@ -188,7 +188,7 @@ func (c *chromaRetriever) Close() error {
 }
 
 func (c *chromaRetriever) createCollection(ctx context.Context) error {
-	endpoint := c.url + "/api/v1/collections"
+	endpoint := c.url + "/api/v2/tenants/default_tenant/databases/default_database/collections"
 	body := map[string]string{"name": c.collectionName}
 	jsonData, _ := json.Marshal(body)
 
@@ -202,8 +202,7 @@ func (c *chromaRetriever) createCollection(ctx context.Context) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		// If already exists, just get it
-		endpointGet := fmt.Sprintf("%s/api/v1/collections/%s", c.url, c.collectionName)
+		endpointGet := fmt.Sprintf("%s/api/v2/tenants/default_tenant/databases/default_database/collections/%s", c.url, c.collectionName)
 		reqGet, _ := http.NewRequestWithContext(ctx, "GET", endpointGet, nil)
 		respGet, err := http.DefaultClient.Do(reqGet)
 		if err != nil {
@@ -232,7 +231,7 @@ func (c *chromaRetriever) createCollection(ctx context.Context) error {
 }
 
 func (c *chromaRetriever) addToCollection(ctx context.Context, chunks []chunker.Chunk, embeddings [][]float64) error {
-	endpoint := fmt.Sprintf("%s/api/v1/collections/%s/add", c.url, c.collectionID)
+	endpoint := fmt.Sprintf("%s/api/v2/tenants/default_tenant/databases/default_database/collections/%s/add", c.url, c.collectionID)
 
 	ids := make([]string, len(chunks))
 	documents := make([]string, len(chunks))
