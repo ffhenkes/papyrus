@@ -8,12 +8,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"crypto/sha256"
+	"encoding/hex"
 	"papyrus/internal/config"
 	"papyrus/pkg/conversation"
+	"papyrus/pkg/embeddings"
 	"papyrus/pkg/llm"
 	"papyrus/pkg/pdf"
 	"papyrus/pkg/repl"
 	"papyrus/pkg/tts"
+	"papyrus/pkg/vectordb"
 )
 
 func main() {
@@ -27,6 +31,11 @@ func main() {
 	maxContext := fs.Int("max-context", 8192, "Maximum tokens to keep in conversation history before pruning")
 	exportFlag := fs.Bool("export", false, "Analyze document, export conversation to Markdown, and exit instantly")
 	ttsFlag := fs.Bool("tts", false, "Enable text-to-speech for model responses")
+	ragFlag := fs.Bool("rag", false, "Enable Retrieval-Augmented Generation (uses vector DB)")
+	vectorDBURL := fs.String("vectordb-url", "", "Vector database URL (overrides env and config)")
+	embedModel := fs.String("embed-model", "", "Ollama model for embeddings (overrides env and config)")
+	topK := fs.Int("top-k", config.DefaultTopK, "Number of chunks to retrieve per query")
+	chunkSize := fs.Int("chunk-size", config.DefaultChunkSize, "Tokens per chunk for ingestion")
 
 	// Parse flags (allowing positional args to remain)
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -74,7 +83,7 @@ func main() {
 
 	// Handle session resumption via --session flag
 	if *sessionID != "" {
-		handleResumeSession(*sessionID, sessionDir, *noCache, *maxContext, ttsEngine, isSSML)
+		handleResumeSession(*sessionID, sessionDir, *noCache, *maxContext, ttsEngine, isSSML, *ragFlag, *vectorDBURL, *embedModel, *topK, *chunkSize)
 		return
 	}
 
@@ -140,6 +149,42 @@ func main() {
 	}
 	client.DocumentText = text
 	client.IsSSML = isSSML
+
+	// Initialize RAG if enabled
+	if *ragFlag {
+		vdbURL := *vectorDBURL
+		if vdbURL == "" {
+			vdbURL = getEnv("VECTORDB_URL", config.DefaultVectorDBURL)
+		}
+		eModel := *embedModel
+		if eModel == "" {
+			eModel = getEnv("EMBED_MODEL", config.DefaultEmbedModel)
+		}
+
+		fmt.Printf("[RAG] Initializing Vector DB at %s with model %s\n", vdbURL, eModel)
+		embedder := embeddings.NewOllamaEmbedder(ollamaURL, eModel)
+		retriever := vectordb.NewChromaRetriever(vdbURL, embedder, *chunkSize, config.DefaultChunkOverlap)
+
+		docHash := hashText(text)
+		fmt.Printf("[RAG] Document Hash: %s\n", docHash)
+
+		exists, err := retriever.CollectionExists(context.Background(), docHash)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not check vector DB: %v\n", err)
+		} else if !exists {
+			fmt.Print("[RAG] Ingesting document into vector database... ")
+			if err := retriever.Ingest(context.Background(), docHash, text); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("Done.")
+		} else {
+			fmt.Println("[RAG] Document already exists in vector DB, skipping ingestion.")
+		}
+
+		client.Retriever = retriever
+		client.TopK = *topK
+	}
 
 	// Handle case where flags were passed after the filename
 	if !*ttsFlag && len(args) > 0 {
@@ -249,7 +294,7 @@ func handleListSessions(sessionDir string) {
 }
 
 // handleResumeSession loads an existing session and enters REPL mode.
-func handleResumeSession(sessionID, sessionDir string, noCache bool, maxContext int, ttsEngine tts.TTSEngine, isSSML bool) {
+func handleResumeSession(sessionID, sessionDir string, noCache bool, maxContext int, ttsEngine tts.TTSEngine, isSSML bool, ragFlag bool, vdbURL, eModel string, topK, chunkSize int) {
 	conv, err := conversation.LoadSession(sessionID, sessionDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -276,6 +321,40 @@ func handleResumeSession(sessionID, sessionDir string, noCache bool, maxContext 
 	}
 	client.DocumentText = conv.DocumentText
 	client.IsSSML = isSSML
+
+	// Re-initialize RAG if enabled
+	if ragFlag {
+		if vdbURL == "" {
+			vdbURL = getEnv("VECTORDB_URL", config.DefaultVectorDBURL)
+		}
+		if eModel == "" {
+			eModel = getEnv("EMBED_MODEL", config.DefaultEmbedModel)
+		}
+
+		fmt.Printf("[RAG] Initializing Vector DB at %s with model %s\n", vdbURL, eModel)
+		embedder := embeddings.NewOllamaEmbedder(ollamaURL, eModel)
+		retriever := vectordb.NewChromaRetriever(vdbURL, embedder, chunkSize, config.DefaultChunkOverlap)
+
+		// In resume mode, we assume the document was already ingested.
+		// We just need to check if the collection exists to set the ID.
+		docHash := hashText(conv.DocumentText)
+		exists, err := retriever.CollectionExists(context.Background(), docHash)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not check vector DB: %v\n", err)
+		} else if !exists {
+			fmt.Println("[RAG] Collection not found for this document. Ingesting now...")
+			if err := retriever.Ingest(context.Background(), docHash, conv.DocumentText); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			} else {
+				fmt.Println("[RAG] Ingestion complete.")
+			}
+		} else {
+			fmt.Println("[RAG] Vector DB collection connected.")
+		}
+
+		client.Retriever = retriever
+		client.TopK = topK
+	}
 
 	// Display last few messages as context
 	fmt.Println("\n--- Conversation so far ---")
@@ -353,6 +432,9 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  --max-context N Max tokens in conversation history before pruning (default: 8192)")
 	fmt.Fprintln(os.Stderr, "  --export        Export session to Markdown and exit immediately")
 	fmt.Fprintln(os.Stderr, "  --tts           Enable text-to-speech for model responses")
+	fmt.Fprintln(os.Stderr, "  --rag           Enable RAG support (requires vector DB)")
+	fmt.Fprintln(os.Stderr, "  --vectordb-URL  URL for ChromaDB (default: http://localhost:8000)")
+	fmt.Fprintln(os.Stderr, "  --embed-model   Model for embeddings (default: nomic-embed-text)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Environment variables:")
 	fmt.Fprintln(os.Stderr, "  OLLAMA_URL    Ollama base URL (default: http://host.docker.internal:11434)")
@@ -367,4 +449,8 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  papyrus --session my-doc-abc123def456")
 	fmt.Fprintln(os.Stderr, "  papyrus --delete my-doc-abc123def456")
 	fmt.Fprintln(os.Stderr, "  OLLAMA_MODEL=deepseek-r1:14b papyrus document.pdf")
+}
+func hashText(text string) string {
+	hash := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(hash[:])
 }
