@@ -1,6 +1,6 @@
 # Papyrus
 
-**Papyrus** is a tool to analyze and explain PDF documents using [Ollama](https://ollama.ai/) — a local LLM runtime. Extract insights, summaries, and answers from your PDFs using customizable prompts and local language models.
+**Papyrus** is a tool to analyze and explain PDF (and text) documents using [Ollama](https://ollama.ai/) — a local LLM runtime. Extract insights, summaries, and answers from your documents using customizable prompts, local language models, optional RAG-powered semantic retrieval, and neural text-to-speech.
 
 ## Table of Contents
 
@@ -9,9 +9,11 @@
 - [Installation](#installation)
 - [Usage](#usage)
 - [Session Persistence](#session-persistence)
-- [Configuration](#configuration)
+- [RAG (Retrieval-Augmented Generation)](#rag-retrieval-augmented-generation)
 - [Text-to-Speech (TTS)](#text-to-speech-tts)
+- [Configuration](#configuration)
 - [Available Commands](#available-commands)
+- [Architecture](#architecture)
 - [Troubleshooting](#troubleshooting)
 
 ## Quick Start
@@ -29,20 +31,16 @@ export OLLAMA_MODEL=qwen3:8b
 export PDF_FILE=pdfs/test.pdf
 export CUSTOM_PROMPT="Summarize this document"
 
-# 3. Analyze a PDF using the containerized CLI (requires the stack from step 2)
+# 3. Start the full stack (Ollama + Piper TTS)
+make up
+
+# 4. Analyze a PDF using the containerized CLI
 make run-cli PDF_FILE=pdfs/test.pdf ARGS="--tts"
 ```
 
-This automatically pulls the latest models and runs the analysis. To start the full stack and keep it running:
+To stop:
 
 ```bash
-# Start Ollama + Papyrus stack in background
-make up
-
-# In another terminal, analyze PDFs using the containerized CLI
-make run-cli PDF_FILE=pdfs/myfile.pdf
-
-# Stop when done
 make down
 ```
 
@@ -104,6 +102,7 @@ make run ARGS="pdfs/test.pdf 'Summarize this'"
 **Mode 1: Docker (Recommended)** — Everything isolated in containers
 - Use: `make run-cli PDF_FILE=pdfs/test.pdf`
 - Ollama runs inside Docker: `http://ollama:11434`
+- Piper TTS runs inside Docker: `http://piper:5000`
 - Models stored in `./ollama_data/` (persistent)
 - No local dependencies needed
 
@@ -113,6 +112,13 @@ make run ARGS="pdfs/test.pdf 'Summarize this'"
 - Useful for: development, integration with local tools
 - Note: Must start Ollama separately (not included)
 
+### Supported Input Formats
+
+Papyrus supports two input file formats:
+
+- **PDF files** (`.pdf`) — Text is extracted page-by-page using the `ledongthuc/pdf` library. Scanned/image-only PDFs are not supported (see [Troubleshooting](#pdf-parsing-fails-or-scanned-image-pdf-error)).
+- **Text files** (`.txt`) — Read directly as plain text. Useful for pre-processed documents or OCR output.
+
 ### Docker-based Analysis (Recommended)
 
 ```bash
@@ -121,8 +127,8 @@ make run-cli PDF_FILE=pdfs/myfile.pdf CUSTOM_PROMPT="List the main topics"
 
 # Or use persistent stack (Ollama + Piper)
 make up                              # Start background services
-make run-cli PDF_FILE=pdfs/file1.pdf ARGS="--tts" # Run CLI with speech
-make run-cli PDF_FILE=pdfs/file2.pdf # Run CLI without speech
+make run-cli PDF_FILE=pdfs/file1.pdf ARGS="--tts"  # Run CLI with speech
+make run-cli PDF_FILE=pdfs/file2.pdf               # Run CLI without speech
 make down                            # Clean up
 ```
 
@@ -132,14 +138,19 @@ make down                            # Clean up
 # Requires: Ollama running on localhost:11434
 make build
 make run ARGS="pdfs/test.pdf"
-```
 
+# With TTS enabled (requires Piper running)
+make run ARGS="pdfs/test.pdf --tts"
+
+# With RAG enabled (requires ChromaDB running)
+make run ARGS="pdfs/test.pdf --rag"
+```
 
 ## Session Persistence
 
 Papyrus automatically saves your conversation to disk so you can **resume analysis later** without re-processing the PDF.
 
-Sessions are stored in `~/.papyrus/sessions/` as JSON files.
+Sessions are stored in `~/.papyrus/sessions/` as JSON files. Each session includes the full document text and conversation history.
 
 ### Session Flags
 
@@ -157,8 +168,9 @@ papyrus --delete <session-id>
 # Advanced Flags
 papyrus --export                     # Export to MD and exit
 papyrus --no-cache                   # Disable semantic cache
-papyrus --max-context 4096           # Restrict token history
-papyrus --tts                       # Enable text-to-speech (with SSML support)
+papyrus --max-context 8192           # Restrict token history (default: 8192)
+papyrus --tts                        # Enable text-to-speech (with SSML support)
+papyrus --rag                        # Enable RAG (retrieval-augmented generation)
 ```
 
 **Example workflow:**
@@ -179,31 +191,88 @@ While in interactive mode, the following commands are available:
 | Command | Description |
 |---------|-------------|
 | `history` | Show all messages in the current session |
-| `stats` | Show precise token usage statistics |
+| `stats` | Show cumulative token usage statistics (input, output, total) |
 | `export` | Export the current session to a Markdown file |
 | `save` | Explicitly save the session to disk |
-| `session info` | Show session metadata (ID, file, timestamps, message count) |
+| `session info` | Show session metadata (ID, file, timestamps, message count, doc size) |
 | `exit` / `quit` | Save and exit |
+
+## RAG (Retrieval-Augmented Generation)
+
+Papyrus supports RAG for improved accuracy on large documents. Instead of sending the entire document text to the LLM, RAG chunks the document, stores embeddings in a vector database, and retrieves only the most relevant chunks for each query.
+
+### How it Works
+
+1. **Chunking** — The document is split into overlapping chunks using BPE token counting (`cl100k_base` encoding via [tiktoken-go](https://github.com/pkoukk/tiktoken-go)).
+2. **Embedding** — Each chunk is embedded using an Ollama embedding model (default: `nomic-embed-text`) via the `/api/embed` endpoint.
+3. **Storage** — Embeddings and chunk text are stored in [ChromaDB](https://www.trychroma.com/) with a collection name derived from a SHA-256 hash of the document text.
+4. **Retrieval** — For each user query, the query is embedded and the top-K most similar chunks are retrieved and injected into the system prompt.
+5. **Caching** — If the document has already been ingested (same hash), ingestion is skipped.
+
+### Prerequisites
+
+RAG requires a running ChromaDB instance. The Docker Compose stack includes one:
+
+```bash
+# Start the full stack including ChromaDB
+make up
+
+# Or start just ChromaDB for local development
+docker compose --profile rag up -d chromadb
+```
+
+### Usage
+
+```bash
+# Docker mode with RAG
+make run-cli PDF_FILE=pdfs/large-report.pdf ARGS="--rag"
+
+# Local mode with RAG
+make run ARGS="pdfs/large-report.pdf --rag"
+
+# Customize retrieval parameters
+make run ARGS="pdfs/report.pdf --rag --top-k 10 --chunk-size 256"
+```
+
+### RAG Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--rag` | `false` | Enable RAG mode |
+| `--vectordb-url` | `http://localhost:8000` | ChromaDB URL (overrides `VECTORDB_URL` env) |
+| `--embed-model` | `nomic-embed-text` | Ollama embedding model (overrides `EMBED_MODEL` env) |
+| `--top-k` | `5` | Number of chunks to retrieve per query |
+| `--chunk-size` | `512` | Tokens per chunk for document ingestion |
+
+### RAG Environment Variables
+
+| Variable | Docker Default | Local Default | Description |
+|----------|----------------|---------------|-------------|
+| `VECTORDB_URL` | `http://chromadb:8000` | `http://localhost:8000` | ChromaDB API endpoint |
+| `EMBED_MODEL` | `nomic-embed-text` | `nomic-embed-text` | Ollama model for generating embeddings |
 
 ## Text-to-Speech (TTS)
 
 Papyrus can generate speech (audio) for model responses using [Piper](https://github.com/rhasspy/piper) with SSML support implemented in Papyrus.
 
-### How it works
+### How it Works
 
-1.  **Neural Voice Quality:** Papyrus uses Piper for high-quality, fast, local neural TTS synthesis.
-2.  **SSML Support:** Papyrus parses SSML markup, breaking it into segments and synthesizing each individually with Piper. This enables tags like `<speak>`, `<break time="500ms"/>`, and `<voice>` for precise control over speech pacing, pauses, and voice switching—without requiring SSML support in Piper itself.
-3.  **Activation:** Use the `--tts` flag to enable text-to-speech.
-4.  **Output:** Audio files are saved as `.wav` files in the `voice/` directory.
+1. **Neural Voice Quality:** Papyrus uses Piper for high-quality, fast, local neural TTS synthesis.
+2. **Markdown-to-SSML Conversion:** Papyrus automatically converts LLM markdown output to SSML, adding prosody adjustments for headers (slightly faster, higher pitch), bold text (slower, emphasized), list items, and block quotes. Code blocks are silently removed.
+3. **SSML Parsing and Synthesis:** Papyrus parses the SSML markup into individual segments and synthesizes each with Piper separately. This enables tags like `<speak>`, `<break time="500ms"/>`, `<voice>`, `<prosody>`, and `<s>` for precise control over speech pacing, pauses, and voice switching — without requiring SSML support in Piper itself.
+4. **Audio Mixing:** Individual WAV segments (including generated silence for `<break>` tags) are concatenated into a single WAV file.
+5. **Activation:** Use the `--tts` flag to enable text-to-speech.
+6. **Output:** Audio files are saved as `.wav` files in the `voice/` directory.
     - Initial explanation: `voice/<session-id>_initial.wav`
     - REPL responses: `voice/<session-id>_<message-index>.wav`
 
 ### Configuration for TTS
 
 | Variable | Default | Description |
-|----------|---|-------------|
-| `PIPER_URL` | `http://localhost:5000` | Piper HTTP endpoint |
-| `PIPER_VOICE` | `pt_BR-faber-medium` | Piper Voice (e.g., `pt_BR-faber-medium`, `en_US-lessac-medium`) |
+|----------|---------|-------------|
+| `PIPER_URL` | `http://piper:5000` (Docker) / `http://localhost:5000` (local) | Piper HTTP endpoint |
+| `PIPER_VOICE` | `en_US-lessac-medium` | Piper voice ID (e.g., `pt_BR-faber-medium`, `en_US-lessac-medium`) |
+| `PIPER_VOICE_URL` | *(see .env.example)* | Download URL for the Piper voice model (used by Docker) |
 
 **Example:**
 ```bash
@@ -212,14 +281,22 @@ make run-cli PDF_FILE=pdfs/report.pdf ARGS="--tts"
 ```
 
 ### Changing the TTS Voice
-You can change the language or voice used by Piper by setting the `PIPER_VOICE_URL` in your `.env` file. You can find more voices on the [Piper HuggingFace repository](https://huggingface.co/rhasspy/piper-voices).
+
+You can change the language or voice used by Piper by setting `PIPER_VOICE` and `PIPER_VOICE_URL` in your `.env` file. You can find more voices on the [Piper HuggingFace repository](https://huggingface.co/rhasspy/piper-voices).
+
+**English (US) Example (default):**
+```bash
+PIPER_VOICE=en_US-lessac-medium
+PIPER_VOICE_URL=https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx?download=true
+```
 
 **Portuguese (Brazil) Example:**
 ```bash
+PIPER_VOICE=pt_BR-faber-medium
 PIPER_VOICE_URL=https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx?download=true
 ```
 
-Simply update the variable and run `make up` to restart the Piper service with the new model.
+Simply update the variables and run `make up` to restart the Piper service with the new model.
 
 ## Configuration
 
@@ -232,27 +309,42 @@ cp .env.example .env
 ### Environment Variables
 
 | Variable | Docker Default | Local Default | Description |
-|----------|---|---|-------------|
-| `OLLAMA_URL` | `http://ollama:11434` | `http://host.docker.internal:11434` | Ollama API endpoint |
+|----------|----------------|---------------|-------------|
+| `OLLAMA_URL` | `http://ollama:11434` | `http://localhost:11434` | Ollama API endpoint |
 | `OLLAMA_MODEL` | `qwen3:8b` | `qwen3:8b` | LLM model to use (must be installed in Ollama) |
 | `PDF_FILE` | `pdfs/test.pdf` | N/A | Path to PDF file to analyze |
-| `CUSTOM_PROMPT` | `"Explain this document."` | N/A | Custom prompt for PDF analysis |
-| `PIPER_URL` | `http://localhost:5000` | `http://localhost:5000` | Piper TTS API endpoint |
+| `CUSTOM_PROMPT` | `"Explain this document."` | N/A | Custom prompt for document analysis |
+| `PIPER_URL` | `http://piper:5000` | `http://localhost:5000` | Piper TTS API endpoint |
+| `PIPER_VOICE` | `en_US-lessac-medium` | `en_US-lessac-medium` | Piper voice ID |
+| `PIPER_VOICE_URL` | *(HuggingFace URL)* | N/A | Download URL for the voice model (Docker only) |
+| `VECTORDB_URL` | `http://chromadb:8000` | `http://localhost:8000` | ChromaDB API endpoint (for RAG) |
+| `EMBED_MODEL` | `nomic-embed-text` | `nomic-embed-text` | Ollama model for embeddings (for RAG) |
 
-**Important:** 
-- **Docker mode** uses `http://ollama:11434` (internal Docker service name)
-- **Local binary mode** tries to connect to `http://host.docker.internal:11434` which only works from inside Docker containers
+**Important:**
+- **Docker mode** uses internal service names (`http://ollama:11434`, `http://piper:5000`, `http://chromadb:8000`)
+- **Local binary mode** (`make run`) automatically sets `OLLAMA_URL=http://localhost:11434` and `PIPER_URL=http://localhost:5000`
 - **To run locally**, start Ollama on your machine and it will listen on `http://localhost:11434`
-- The `make run` target automatically sets `OLLAMA_URL=http://localhost:11434` for local execution
+
+### Persistent Data Directories
+
+| Directory | Purpose |
+|-----------|---------|
+| `./ollama_data/` | Ollama model cache (Docker volume) |
+| `./chroma_data/` | ChromaDB vector data (Docker volume, RAG mode) |
+| `./voice/` | Generated TTS audio files (`.wav`) |
+| `./pdfs/` | Input PDF files (mounted as `/pdfs` in containers) |
+| `~/.papyrus/sessions/` | Session persistence (JSON files) |
+| `~/.papyrus/cache/` | LLM response cache (per-session, 24h TTL) |
 
 ### Supported Ollama Models
 
 Common models available in Ollama (install/pull them beforehand):
-- `qwen3:8b` — Fast, general-purpose (recommended default)
+- `qwen3:8b` — Fast, general-purpose (recommended default). Supports reasoning (`<think>` blocks).
 - `llama2:7b` — General-purpose, well-rounded
 - `mistral:7b` — Fast, excellent for summaries
 - `neural-chat:7b` — Optimized for conversations
 - `gemma:7b` — Lightweight, good performance
+- `deepseek-r1:14b` — Reasoning-focused (higher resource needs)
 
 For more models, visit [Ollama Model Library](https://ollama.ai/library).
 
@@ -267,7 +359,7 @@ make run-cli PDF_FILE=pdfs/test.pdf CUSTOM_PROMPT="Extract all JSON data"
 # Generate specific summary with speech
 make run-cli PDF_FILE=pdfs/test.pdf CUSTOM_PROMPT="Create summary" ARGS="--tts"
 
-# Q&A mode  
+# Q&A mode
 make run-cli PDF_FILE=pdfs/test.pdf CUSTOM_PROMPT="What are the risks?"
 ```
 
@@ -281,32 +373,103 @@ The system prompt used is:
 
 ## Available Commands
 
+### Makefile Targets
+
 | Command | Description |
 |---------|-------------|
 | `make help` | Show all available targets |
-| `make up` | Start Ollama + Papyrus Docker stack (`docker-compose up`) |
-| `make down` | Stop and remove containers (`docker-compose down`) |
-| `make run-cli PDF_FILE=... [CUSTOM_PROMPT=...]` | Run CLI in container |
-| `make build` | Build binary locally (default: linux/amd64) |
-| `make run ARGS="..."` | Build and run binary locally (requires local Ollama at localhost:11434) |
+| `make up` | Start full infra stack: Ollama + Piper (`docker-compose up -d --build`) |
+| `make up-ollama` | Start only the Ollama LLM service |
+| `make up-piper` | Start only the Piper TTS service |
+| `make down` | Stop and remove all containers (`docker-compose down`) |
+| `make run-cli PDF_FILE=... [CUSTOM_PROMPT=...] [ARGS=...]` | Run CLI in container |
+| `make build` | Build binary locally (default: `linux/amd64`, override with `GOOS`/`GOARCH`) |
+| `make run ARGS="..."` | Build and run binary locally (sets `OLLAMA_URL` and `PIPER_URL` to `localhost`) |
 | `make test` | Run automated tests |
-| `make lint` | Run code linter |
+| `make lint` | Run code linter ([golangci-lint](https://golangci-lint.run/), auto-installed if missing) |
 | `make deps` | Download/tidy Go dependencies |
-| `make clean` | Remove bin/ directory |
+| `make clean` | Remove `bin/` directory |
 | `make docker-build` | Build Docker image manually |
 
-**Binary (session management):**
+### CLI Flags
 
 | Flag | Description |
 |------|-------------|
-| `papyrus <file.pdf> [prompt]` | Analyze a PDF and enter interactive REPL |
-| `papyrus --list` | List all saved sessions |
-| `papyrus --session <id>` | Resume a saved session |
-| `papyrus --delete <id>` | Delete a saved session |
-| `papyrus --export` | Analyze, format as Markdown, and exit |
-| `papyrus --no-cache` | Disable local semantic caching |
-| `papyrus --max-context N` | Configure conversation history limit |
-| `papyrus --tts` | Enable text-to-speech for responses (with SSML) |
+| `papyrus <file> [prompt]` | Analyze a PDF or TXT file and enter interactive REPL |
+| `--list` / `--sessions` | List all saved sessions |
+| `--session <id>` | Resume a saved session |
+| `--delete <id>` | Delete a saved session |
+| `--export` | Analyze, export conversation to Markdown, and exit |
+| `--no-cache` | Disable local response caching |
+| `--max-context N` | Maximum tokens in conversation history before pruning (default: `8192`) |
+| `--tts` | Enable text-to-speech for responses (Piper + SSML) |
+| `--rag` | Enable RAG support (requires ChromaDB) |
+| `--vectordb-url URL` | ChromaDB URL (default: `http://localhost:8000`) |
+| `--embed-model MODEL` | Ollama model for embeddings (default: `nomic-embed-text`) |
+| `--top-k N` | Number of chunks to retrieve per RAG query (default: `5`) |
+| `--chunk-size N` | Tokens per chunk for RAG ingestion (default: `512`) |
+
+## Architecture
+
+```
+papyrus/
+├── cmd/papyrus/             # CLI entry point and flag parsing
+│   └── main.go
+├── internal/config/         # Default configuration constants
+│   └── config.go
+├── pkg/
+│   ├── chunker/             # Token-aware text chunking (tiktoken BPE)
+│   │   └── chunker.go
+│   ├── conversation/        # Multi-turn conversation, session persistence, export
+│   │   ├── conversation.go       # Conversation struct and session ID generation
+│   │   ├── context_manager.go    # History pruning to stay under token limits
+│   │   ├── sessions.go           # Save/load/list/delete sessions as JSON
+│   │   └── exporter.go           # Export conversation to Markdown
+│   ├── embeddings/          # Text embedding via Ollama /api/embed
+│   │   ├── embeddings.go         # Embedder interface
+│   │   └── ollama_embedder.go    # Ollama implementation (batch support)
+│   ├── llm/                 # Ollama LLM client with streaming and caching
+│   │   ├── client.go             # Chat API client, streaming, RAG integration
+│   │   ├── cache.go              # SHA-256 keyed response cache (24h TTL)
+│   │   └── tokenizer.go          # BPE token counting and stats formatting
+│   ├── pdf/                 # PDF text extraction
+│   │   └── extract.go            # Page-by-page text extraction
+│   ├── repl/                # Interactive read-eval-print loop
+│   │   └── repl.go               # REPL commands, TTS integration, auto-save
+│   ├── tts/                 # Text-to-speech pipeline
+│   │   ├── tts.go                # PiperClient, synthesis orchestration
+│   │   ├── ssml_parser.go        # SSML tag parsing (speak, break, voice, prosody, s)
+│   │   ├── markdown_to_ssml.go   # Markdown → SSML conversion with prosody config
+│   │   └── audio_mixer.go        # WAV format handling, PCM concatenation, silence gen
+│   └── vectordb/            # Vector database abstraction
+│       ├── vectordb.go           # Retriever interface
+│       └── chroma.go             # ChromaDB v2 API implementation
+├── docker-compose.yml       # Service definitions (Ollama, Piper, ChromaDB, Papyrus)
+├── Dockerfile               # Multi-stage Go build (golang:1.24-alpine → alpine:3.19)
+├── ollama.Dockerfile        # Custom Ollama image (auto-pulls model on start)
+├── papyrus.sh               # Container entrypoint (waits for Ollama, runs CLI)
+├── ollama-entrypoint.sh     # Ollama container entrypoint (serve + pull model)
+├── Makefile                 # Build, run, and infrastructure targets
+└── .golangci.yml            # Linter config (errcheck, govet, staticcheck, gosec, etc.)
+```
+
+### Docker Compose Services
+
+| Service | Image | Profile | Description |
+|---------|-------|---------|-------------|
+| `papyrus` | Built from `Dockerfile` | `cli` | The Papyrus CLI application |
+| `ollama` | Built from `ollama.Dockerfile` | *(always)* | Ollama LLM server (auto-pulls configured model) |
+| `piper` | `artibex/piper-http` | *(always)* | Piper neural TTS server |
+| `chromadb` | `chromadb/chroma:latest` | `rag`, `cli` | ChromaDB vector database (for RAG) |
+| `voice-downloader` | `alpine:latest` | `cli` | Downloads Piper voice model files |
+
+### Key Design Decisions
+
+- **Document context is sent in the system prompt**, not re-embedded with each user message. This keeps follow-up queries lightweight.
+- **Reasoning model support**: Models like `qwen3` that emit `reasoning_content` in their streaming response are handled transparently — reasoning is wrapped in `<think>` blocks and stripped before TTS synthesis.
+- **SSML is generated client-side** by converting markdown to SSML in Papyrus, not by instructing the LLM to output SSML. This keeps LLM output clean and predictable.
+- **Token counting** uses BPE encoding (`cl100k_base` via tiktoken-go) for accurate estimation, with a word-count heuristic fallback.
+- **Response caching** uses SHA-256 hashed keys with a 24-hour TTL, persisted per-session as JSON files.
 
 ## Troubleshooting
 
@@ -344,9 +507,10 @@ The system prompt used is:
 **Reason:** PDF parser only handles text-based PDFs, not scanned images.
 
 **Workaround:**
-1. Use OCR tools to convert scanned PDFs first: `tesseract scanned.pdf text.pdf`
-2. Ensure PDFs are not encrypted/password-protected
-3. Try a different PDF
+1. Use OCR tools to convert scanned PDFs first: `tesseract scanned.pdf output.txt`
+2. Feed the resulting `.txt` file to Papyrus: `papyrus output.txt`
+3. Ensure PDFs are not encrypted/password-protected
+4. Try a different PDF
 
 ### Docker memory errors ("Cannot allocate memory")
 
@@ -363,7 +527,7 @@ The system prompt used is:
 **Problem:** PDF analysis takes too long.
 
 **Causes & Solutions:**
-- **Large PDF:** Use a smaller model or break into smaller files
+- **Large PDF:** Use a smaller model or break into smaller files. Enable `--rag` for large documents.
 - **Large model (13B+):** Switch to 7B parameter models: `mistral:7b`, `llama2:7b`
 - **Slow disk:** Ensure project is on SSD, not network/USB drive
 - **Low memory:** Increase Docker/system memory allocation
@@ -387,11 +551,23 @@ The system prompt used is:
 - Use relative paths: `make run-cli PDF_FILE=pdfs/myfile.pdf` (not absolute paths)
 - Files should be readable: `chmod 644 pdfs/yourfile.pdf`
 
+### RAG ingestion errors
+
+**Problem:** Vector DB errors when using `--rag`.
+
+**Solutions:**
+- Ensure ChromaDB is running: `docker-compose --profile rag up -d chromadb`
+- Verify ChromaDB is accessible: `curl http://localhost:8000/api/v2/heartbeat`
+- Ensure the embedding model is pulled: `ollama pull nomic-embed-text`
+- Check that `VECTORDB_URL` and `EMBED_MODEL` are correctly configured
+
 ---
 
 ## Development
 
 For more information on local development, testing, and contributing, see the project structure and Makefile targets above.
+
+The linter configuration (`.golangci.yml`) enables: `errcheck`, `govet`, `staticcheck`, `unused`, `bodyclose`, `gosec`, and `errorlint`.
 
 ## License
 

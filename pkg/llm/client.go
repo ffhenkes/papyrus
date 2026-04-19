@@ -2,6 +2,7 @@ package llm
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"papyrus/pkg/vectordb"
 )
 
 // ChatMessage represents a single message in the conversation.
@@ -44,9 +47,11 @@ type Client struct {
 	URL          string
 	ModelName    string
 	MaxTokens    int
-	DocumentText string         // Document text stored once to avoid resending on each follow-up
-	Cache        *ResponseCache // Optional response cache
-	IsSSML       bool           // If true, instructions the model to output SSML
+	DocumentText string             // Document text stored once to avoid resending on each follow-up
+	Cache        *ResponseCache     // Optional response cache
+	IsSSML       bool               // If true, instructions the model to output SSML
+	Retriever    vectordb.Retriever // Optional vector database for RAG
+	TopK         int                // Number of chunks to retrieve (default: 5)
 }
 
 // NewClient creates a new Ollama API client.
@@ -55,6 +60,7 @@ func NewClient(url, modelName string, maxTokens int) *Client {
 		URL:       url,
 		ModelName: modelName,
 		MaxTokens: maxTokens,
+		TopK:      5,
 	}
 }
 
@@ -176,7 +182,27 @@ Be thorough but concise. Use bullet points and sections to organize your explana
 	// not by the LLM. This keeps LLM output clean and allows proper markdown processing.
 
 	// Include document context in system message for first message, reference for follow-ups
-	if documentContext != "" {
+	if c.Retriever != nil {
+		// RAG mode: retrieve relevant chunks
+		ctx := context.Background() // Use background context or pass one
+		docs, err := c.Retriever.Query(ctx, userMessage, c.TopK)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: RAG retrieval failed: %v\n", err)
+		} else if len(docs) > 0 {
+			var sb strings.Builder
+			sb.WriteString("RELEVANT DOCUMENT CONTEXT:\n")
+			for _, d := range docs {
+				fmt.Fprintf(&sb, "\n--- Chunk %s (Score: %.2f) ---\n%s\n", d.ID, d.Score, d.Content)
+			}
+			systemPrompt = fmt.Sprintf("%s\n\n%s", systemPrompt, sb.String())
+		} else {
+			// Fallback if no relevant chunks found (optional: inject full text if short?)
+			if documentContext != "" {
+				systemPrompt = fmt.Sprintf("%s\n\nDOCUMENT CONTENT:\n<document>\n%s\n</document>", systemPrompt, documentContext)
+			}
+		}
+	} else if documentContext != "" {
+		// Non-RAG mode: inject full document
 		systemPrompt = fmt.Sprintf("%s\n\nDOCUMENT CONTENT:\n<document>\n%s\n</document>", systemPrompt, documentContext)
 	}
 

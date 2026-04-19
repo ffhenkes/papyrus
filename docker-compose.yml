@@ -8,12 +8,15 @@ services:
       - CUSTOM_PROMPT=${CUSTOM_PROMPT:-"Explain this document."}
       - PIPER_URL=${PIPER_URL:-http://piper:5000}
       - PDF_FILE=/${PDF_FILE:-pdfs/test.pdf}
+      - VECTORDB_URL=${VECTORDB_URL:-http://chromadb:8000}
+      - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text}
     volumes:
       - ./pdfs:/pdfs:ro
       - ./voice:/app/voice
     command: []
     depends_on:
       - ollama
+      - chromadb
 
   ollama:
     build:
@@ -55,3 +58,14 @@ services:
       fi &&
       echo 'Voice files ready.' &&
       ls -lah /output/"
+
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+    profiles: ["rag", "cli"]
